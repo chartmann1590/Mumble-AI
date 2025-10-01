@@ -1,0 +1,6 @@
+pymumble
+requests
+numpy
+opuslib
+protobuf
+psycopg2-binary

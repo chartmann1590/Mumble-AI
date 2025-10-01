@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+  mumble-server:
+    image: mumblevoip/mumble-server:latest
+    container_name: mumble-server
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    volumes:
+      - ./mumble-data:/data
+      - ./mumble-config.ini:/etc/mumble-server.ini
+    environment:
+      - MUMBLE_SUPERUSER_PASSWORD=${MUMBLE_PASSWORD:-changeme}
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+  faster-whisper:
+    build:
+      context: ./faster-whisper-service
+      dockerfile: Dockerfile
+    container_name: faster-whisper
+    ports:
+      - "5000:5000"
+    environment:
+      - MODEL_SIZE=${WHISPER_MODEL:-base}
+      - DEVICE=cpu
+    volumes:
+      - ./models/whisper:/app/models
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+  piper-tts:
+    build:
+      context: ./piper-tts-service
+      dockerfile: Dockerfile
+    container_name: piper-tts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+    volumes:
+      - piper-voices:/app/models
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mumble-ai-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-mumbleai}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      - POSTGRES_DB=${POSTGRES_DB:-mumble_ai}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mumbleai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web-control-panel:
+    build:
+      context: ./web-control-panel
+      dockerfile: Dockerfile
+    container_name: web-control-panel
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5002:5002"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+    volumes:
+      - piper-voices:/app/piper_voices
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+  mumble-bot:
+    build:
+      context: ./mumble-bot
+      dockerfile: Dockerfile
+    container_name: mumble-bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mumble-server:
+        condition: service_started
+      faster-whisper:
+        condition: service_started
+      piper-tts:
+        condition: service_started
+    environment:
+      - MUMBLE_HOST=mumble-server
+      - MUMBLE_PORT=64738
+      - MUMBLE_USERNAME=${BOT_USERNAME:-AI-Bot}
+      - MUMBLE_PASSWORD=${BOT_PASSWORD:-}
+      - WHISPER_URL=http://faster-whisper:5000
+      - PIPER_URL=http://piper-tts:5001
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama2}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+networks:
+  mumble-ai-network:
+    driver: bridge
+
+volumes:
+  mumble-data:
+  postgres-data:
+  piper-voices:

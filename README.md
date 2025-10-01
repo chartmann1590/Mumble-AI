@@ -1,0 +1,417 @@
+# Mumble AI Bot
+
+A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech recognition, text-to-speech, conversation memory, and a web-based control panel.
+
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+
+## Features
+
+### 🎙️ Voice & Text Interaction
+- **Speech-to-Text**: Real-time voice transcription using Faster Whisper
+- **Text-to-Speech**: Natural voice synthesis with Piper TTS (31 voice options)
+- **Dual Communication**: Responds to voice with voice, text with text
+- **Silence Detection**: Automatically processes speech after 1.5 seconds of silence
+
+### 🤖 AI Integration
+- **Ollama Integration**: Local LLM support (llama3.2, qwen2.5-coder, gemma3, and more)
+- **Conversation Memory**: PostgreSQL-backed conversation history
+- **Context-Aware**: Remembers previous conversations for natural dialogue
+- **Custom Personas**: Define and AI-enhance bot personalities
+
+### 🎨 Web Control Panel
+- **Real-Time Dashboard**: Live statistics and conversation monitoring
+- **Voice Selection**: Choose from 31+ diverse TTS voices (US, UK, Australian accents)
+- **Model Management**: Switch between Ollama models on-the-fly
+- **Persona Configuration**: Create custom bot personalities with AI enhancement
+- **History Management**: View and clear conversation history
+
+### 🔧 Technical Features
+- **Docker Compose**: Full stack deployment with one command
+- **Microservices Architecture**: Modular, scalable design
+- **Health Checks**: Automatic service monitoring and recovery
+- **Audio Processing**: Professional-grade audio resampling (48kHz for Mumble)
+- **Database Persistence**: All configurations and history stored in PostgreSQL
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Mumble Server  │
+└────────┬────────┘
+         │
+    ┌────▼─────┐
+    │ AI Bot   │
+    └──┬───┬───┘
+       │   │
+   ┌───▼───▼────────────────┐
+   │                        │
+┌──▼────────┐  ┌───────────▼─┐  ┌──────────────┐
+│  Faster   │  │  Piper TTS  │  │   Ollama     │
+│  Whisper  │  │  Service    │  │  (External)  │
+└───────────┘  └─────────────┘  └──────────────┘
+                      │
+              ┌───────▼────────┐
+              │   PostgreSQL   │
+              └───────┬────────┘
+                      │
+              ┌───────▼────────┐
+              │ Web Control    │
+              │    Panel       │
+              └────────────────┘
+```
+
+## Prerequisites
+
+- Docker and Docker Compose installed
+- Ollama installed and running locally
+- A Mumble client (download from https://www.mumble.info/)
+
+## Setup
+
+### 1. Configure Environment
+
+Copy the example environment file and customize it:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` to configure:
+- `MUMBLE_PASSWORD` - Password for Mumble server superuser
+- `BOT_USERNAME` - Name of the AI bot
+- `WHISPER_MODEL` - Whisper model size (tiny, base, small, medium, large)
+- `OLLAMA_MODEL` - Your Ollama model name (e.g., llama2, mistral, etc.)
+
+### 2. Ensure Ollama is Running
+
+Make sure Ollama is installed and running on your local machine:
+
+```bash
+ollama serve
+```
+
+Pull a model if you haven't already:
+
+```bash
+ollama pull llama2
+```
+
+### 3. Start the Stack
+
+Build and start all services:
+
+```bash
+docker-compose up -d
+```
+
+On first run, this will:
+- Download and set up the Mumble server
+- Download Whisper models
+- Download 31 Piper TTS voice models
+- Initialize PostgreSQL database
+- Build and start the bot
+
+### 4. Access the Control Panel
+
+Open your browser and navigate to:
+```
+http://localhost:5002
+```
+
+From here you can:
+- Change AI models
+- Select TTS voices
+- Configure bot persona
+- View conversation history
+- Monitor statistics
+
+### 5. Connect with Mumble Client
+
+1. Open your Mumble client
+2. Add a new server:
+   - **Address:** `localhost`
+   - **Port:** `64738`
+   - **Username:** Your name
+   - **Password:** Leave empty (unless you set one)
+
+3. Connect to the server
+4. You should see the AI bot in the channel
+
+## Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Mumble Server | 64738 | VoIP server |
+| Faster Whisper | 5000 | Speech-to-text API |
+| Piper TTS | 5001 | Text-to-speech API |
+| Web Control Panel | 5002 | Management interface |
+| PostgreSQL | 5432 | Database (internal) |
+| AI Bot | - | Mumble client |
+
+## Usage
+
+### Voice Interaction
+
+1. Connect to the Mumble server with your client
+2. Start speaking - the bot listens automatically
+3. After you finish speaking (1.5 seconds of silence), the bot will:
+   - Transcribe your speech
+   - Send it to Ollama
+   - Speak the response back to you
+
+### Text Interaction
+
+1. Send a text message in Mumble chat
+2. The bot will respond with a text message
+
+### Web Control Panel Features
+
+Access at `http://localhost:5002`
+
+**Dashboard**
+- Total messages, unique users
+- Voice vs. text message counts
+- Auto-refresh every 10 seconds
+
+**Ollama Configuration**
+- Change server URL
+- Select AI model
+- Refresh available models
+
+**Voice Selection**
+- Dropdown with 31 voices
+- Instant voice switching
+- Sorted alphabetically
+
+**Bot Persona**
+- Define custom personalities
+- AI-enhanced persona generation
+- Persistent across restarts
+
+**Conversation History**
+- Last 50 messages
+- User/assistant separation
+- Timestamps and message types
+- One-click history clearing
+
+### Setting a Persona
+
+1. Go to `http://localhost:5002`
+2. Scroll to "🤖 Bot Persona"
+3. Enter: "You are a helpful pirate who loves sailing"
+4. Click "✨ AI Enhance" to expand the description
+5. Click "Save Persona"
+6. Talk to the bot and experience the personality!
+
+### Available Voices (31 Total)
+
+**US English:**
+- Female: lessac, amy, kristin, kathleen, hfc_female
+- Male: joe, bryce, danny, john, kusal, hfc_male
+- Multi-speaker: l2arctic (24 speakers with diverse accents), arctic (18), libritts (904)
+
+**British English:**
+- Female: alba, jenny_dioco, southern_english_female
+- Male: northern_english_male, alan
+- Regional: cori (Irish), semaine (Scottish), aru (12 speakers), vctk (109 speakers)
+
+**Other:**
+- Australian: wavenet-a
+
+## Configuration
+
+### Whisper Model Sizes
+
+Larger models are more accurate but slower:
+
+- `tiny` - Fastest, least accurate
+- `base` - Good balance (default)
+- `small` - Better accuracy
+- `medium` - High accuracy
+- `large` - Best accuracy, slowest
+
+### Ollama Models
+
+You can use any Ollama model. Popular options:
+
+- `llama2` - General purpose
+- `mistral` - Fast and capable
+- `codellama` - For coding questions
+- `orca-mini` - Smaller, faster
+
+Change the model in `.env`:
+
+```env
+OLLAMA_MODEL=mistral
+```
+
+## Troubleshooting
+
+### Bot can't connect to Ollama
+
+Make sure Ollama is running and accessible. Test with:
+
+```bash
+curl http://localhost:11434/api/generate -d '{"model":"llama2","prompt":"Hello"}'
+```
+
+### Audio quality issues
+
+Try increasing the Whisper model size in `.env`:
+
+```env
+WHISPER_MODEL=small
+```
+
+### Bot not responding
+
+Check the logs:
+
+```bash
+docker-compose logs -f mumble-bot
+```
+
+### Services not starting
+
+Ensure all ports are available:
+- 64738 (Mumble)
+- 5000 (Whisper)
+- 5001 (Piper)
+
+## Stopping the Stack
+
+```bash
+docker-compose down
+```
+
+To remove all data:
+
+```bash
+docker-compose down -v
+```
+
+## Project Structure
+
+```
+Mumble-AI/
+├── docker-compose.yml          # Service orchestration
+├── .env                        # Environment configuration
+├── .gitignore                  # Git ignore rules
+├── init-db.sql                 # Database schema
+├── mumble-config.ini           # Mumble server config
+├── README.md                   # This file
+├── mumble-bot/                 # AI bot service
+│   ├── bot.py
+│   ├── Dockerfile
+│   └── requirements.txt
+├── faster-whisper-service/     # STT service
+│   ├── app.py
+│   ├── Dockerfile
+│   └── requirements.txt
+├── piper-tts-service/          # TTS service
+│   ├── app.py
+│   ├── download_model.py
+│   ├── Dockerfile
+│   └── requirements.txt
+├── web-control-panel/          # Management UI
+│   ├── app.py
+│   ├── download_voices.py
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── templates/
+│       └── index.html
+└── docs/                       # Documentation
+    ├── ARCHITECTURE.md
+    ├── API.md
+    ├── CONFIGURATION.md
+    └── TROUBLESHOOTING.md
+```
+
+## Advanced Configuration
+
+### Using GPU for Whisper
+
+Edit `docker-compose.yml` in the `faster-whisper` service:
+
+```yaml
+environment:
+  - DEVICE=cuda
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+```
+
+### Custom Piper Voice
+
+Download additional voices from https://github.com/rhasspy/piper and update the download URLs in `web-control-panel/download_voices.py`.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) - System design and component interaction
+- [API Reference](docs/API.md) - Complete API documentation
+- [Configuration](docs/CONFIGURATION.md) - Detailed configuration guide
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+
+## Development
+
+### Building from Source
+
+```bash
+# Build all services
+docker-compose build
+
+# Build specific service
+docker-compose build mumble-bot
+
+# Rebuild without cache
+docker-compose build --no-cache
+```
+
+### Logs
+
+```bash
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f mumble-bot
+
+# Last 100 lines
+docker-compose logs --tail=100 mumble-bot
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details
+
+## Acknowledgments
+
+- [Mumble](https://www.mumble.info/) - Open source VoIP software
+- [Piper TTS](https://github.com/rhasspy/piper) - Fast neural TTS
+- [Faster Whisper](https://github.com/guillaumekln/faster-whisper) - Efficient speech recognition
+- [Ollama](https://ollama.ai/) - Local LLM runtime
+- [pymumble](https://github.com/azlux/pymumble) - Python Mumble client
+
+## Support
+
+For issues and questions:
+- Open an issue on Gitea
+- Check [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- Review logs with `docker-compose logs`
+
+---
+
+**Built with ❤️ using Docker, Python, and AI**
