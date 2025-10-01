@@ -11,8 +11,11 @@ logging.basicConfig(level=logging.INFO)
 model_size = os.getenv('MODEL_SIZE', 'base')
 device = os.getenv('DEVICE', 'cpu')
 
-logging.info(f"Loading Whisper model: {model_size} on {device}")
-model = WhisperModel(model_size, device=device, compute_type="int8")
+# Use int8 for CUDA (stable for GTX 1080), int8 for CPU
+compute_type = "int8"
+
+logging.info(f"Loading Whisper model: {model_size} on {device} with compute type {compute_type}")
+model = WhisperModel(model_size, device=device, compute_type=compute_type)
 logging.info("Model loaded successfully")
 
 

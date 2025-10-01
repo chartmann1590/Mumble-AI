@@ -389,9 +389,14 @@ class MumbleAIBot:
             # Build the full prompt
             full_prompt = ""
 
+            # Add conciseness instruction and no emoji rule
+            full_prompt = "Keep your responses brief and conversational (1-3 sentences). Never use emojis in your responses. "
+
             # Add persona if configured
             if persona and persona.strip():
-                full_prompt = f"{persona.strip()}\n\n"
+                full_prompt += f"{persona.strip()}\n\n"
+            else:
+                full_prompt += "\n\n"
 
             # Add conversation history if available
             if history:

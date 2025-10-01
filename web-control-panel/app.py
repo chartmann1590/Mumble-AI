@@ -157,6 +157,73 @@ def reset_conversations():
 
     return jsonify({'success': True, 'deleted': deleted_count})
 
+# Voice metadata mapping
+VOICE_METADATA = {
+    # English - US
+    'en_US': {'region': 'English - US', 'lang': 'English'},
+    # English - GB
+    'en_GB': {'region': 'English - UK', 'lang': 'English'},
+    # Czech
+    'cs_CZ': {'region': 'Czech', 'lang': 'Czech'},
+    # Spanish
+    'es_AR': {'region': 'Spanish - Argentina', 'lang': 'Spanish'},
+    'es_ES': {'region': 'Spanish - Spain', 'lang': 'Spanish'},
+    'es_MX': {'region': 'Spanish - Mexico', 'lang': 'Spanish'},
+    # Hindi
+    'hi_IN': {'region': 'Hindi - India', 'lang': 'Hindi'},
+    # Malayalam
+    'ml_IN': {'region': 'Malayalam - India', 'lang': 'Malayalam'},
+    # Nepali
+    'ne_NP': {'region': 'Nepali', 'lang': 'Nepali'},
+    # Vietnamese
+    'vi_VN': {'region': 'Vietnamese', 'lang': 'Vietnamese'},
+    # Chinese
+    'zh_CN': {'region': 'Chinese - Mandarin', 'lang': 'Chinese'},
+}
+
+# Gender indicators in voice names
+FEMALE_NAMES = ['lessac', 'amy', 'kristin', 'kathleen', 'hfc_female', 'alba', 'jenny', 'female', 'daniela', 'priyamvada', 'meera']
+MALE_NAMES = ['joe', 'bryce', 'danny', 'john', 'kusal', 'hfc_male', 'alan', 'male', 'carlfm', 'davefx', 'pratham']
+
+def get_voice_gender(voice_name):
+    """Determine gender from voice name"""
+    voice_lower = voice_name.lower()
+    for female in FEMALE_NAMES:
+        if female in voice_lower:
+            return 'Female'
+    for male in MALE_NAMES:
+        if male in voice_lower:
+            return 'Male'
+    return 'Neutral'
+
+def parse_voice_name(voice_name):
+    """Parse voice name into components"""
+    parts = voice_name.split('-')
+    if len(parts) >= 3:
+        region_code = parts[0]
+        speaker = parts[1]
+        quality = parts[2]
+
+        region_info = VOICE_METADATA.get(region_code, {'region': region_code, 'lang': region_code})
+        gender = get_voice_gender(speaker)
+
+        return {
+            'name': voice_name,
+            'region': region_info['region'],
+            'language': region_info['lang'],
+            'speaker': speaker,
+            'quality': quality,
+            'gender': gender
+        }
+    return {
+        'name': voice_name,
+        'region': 'Unknown',
+        'language': 'Unknown',
+        'speaker': voice_name,
+        'quality': 'unknown',
+        'gender': 'Neutral'
+    }
+
 # Piper Voice Management
 @app.route('/api/piper/voices', methods=['GET'])
 def get_piper_voices():
@@ -167,7 +234,11 @@ def get_piper_voices():
         for filename in os.listdir(voices_dir):
             if filename.endswith('.onnx'):
                 voice_name = filename.replace('.onnx', '')
-                voices.append(voice_name)
+                voice_info = parse_voice_name(voice_name)
+                voices.append(voice_info)
+
+    # Sort by region, then gender, then speaker name
+    voices.sort(key=lambda x: (x['region'], x['gender'], x['speaker']))
 
     return jsonify({'voices': voices})
 
@@ -195,6 +266,61 @@ def set_current_voice():
     conn.close()
 
     return jsonify({'success': True})
+
+@app.route('/api/piper/preview', methods=['POST'])
+def preview_voice():
+    """Preview a voice by generating sample audio"""
+    data = request.json
+    voice = data.get('voice')
+
+    if not voice:
+        return jsonify({'error': 'No voice specified'}), 400
+
+    # Update the current voice temporarily for preview
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'piper_voice'")
+    original_voice = cursor.fetchone()[0]
+
+    # Set the voice to preview
+    cursor.execute("UPDATE bot_config SET value = %s WHERE key = 'piper_voice'", (voice,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    try:
+        # Generate preview audio
+        preview_text = "Hello, this is a preview of this voice. How do I sound?"
+        response = requests.post(
+            'http://piper-tts:5001/synthesize',
+            json={'text': preview_text},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            # Restore original voice
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE bot_config SET value = %s WHERE key = 'piper_voice'", (original_voice,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            # Return audio as response
+            return response.content, 200, {'Content-Type': 'audio/wav'}
+        else:
+            return jsonify({'error': 'Failed to generate preview'}), 500
+
+    except Exception as e:
+        # Restore original voice on error
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE bot_config SET value = %s WHERE key = 'piper_voice'", (original_voice,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({'error': str(e)}), 500
 
 # Persona Management
 @app.route('/api/persona', methods=['GET'])

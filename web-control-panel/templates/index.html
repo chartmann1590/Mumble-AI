@@ -262,6 +262,8 @@
                         <option value="">Loading...</option>
                     </select>
                 </div>
+
+                <button onclick="previewVoice()" style="background: #3498db;">🔊 Preview Voice</button>
             </div>
 
             <!-- Bot Persona Configuration -->
@@ -412,17 +414,35 @@
                     return;
                 }
 
-                // Sort voices alphabetically
-                const sortedVoices = voicesData.voices.sort();
-
-                sortedVoices.forEach(voice => {
-                    const option = document.createElement('option');
-                    option.value = voice;
-                    option.textContent = voice;
-                    if (voice === currentData.voice) {
-                        option.selected = true;
+                // Group voices by region
+                const voicesByRegion = {};
+                voicesData.voices.forEach(voice => {
+                    if (!voicesByRegion[voice.region]) {
+                        voicesByRegion[voice.region] = [];
                     }
-                    select.appendChild(option);
+                    voicesByRegion[voice.region].push(voice);
+                });
+
+                // Create optgroups for each region
+                Object.keys(voicesByRegion).sort().forEach(region => {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = region;
+
+                    voicesByRegion[region].forEach(voice => {
+                        const option = document.createElement('option');
+                        option.value = voice.name;
+
+                        // Format: speaker (Gender, quality)
+                        const genderLabel = voice.gender !== 'Neutral' ? ` - ${voice.gender}` : '';
+                        option.textContent = `${voice.speaker}${genderLabel} (${voice.quality})`;
+
+                        if (voice.name === currentData.voice) {
+                            option.selected = true;
+                        }
+                        optgroup.appendChild(option);
+                    });
+
+                    select.appendChild(optgroup);
                 });
             } catch (error) {
                 console.error('Error loading voices:', error);
@@ -446,6 +466,41 @@
                 }
             } catch (error) {
                 console.error('Error selecting voice:', error);
+            }
+        }
+
+        async function previewVoice() {
+            const voice = document.getElementById('voice-select').value;
+            if (!voice) {
+                alert('Please select a voice first');
+                return;
+            }
+
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '⏳ Generating...';
+
+            try {
+                const response = await fetch('/api/piper/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({voice})
+                });
+
+                if (response.ok) {
+                    const audioBlob = await response.blob();
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+                } else {
+                    alert('Error generating preview');
+                }
+            } catch (error) {
+                console.error('Error previewing voice:', error);
+                alert('Error previewing voice');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔊 Preview Voice';
             }
         }
 
