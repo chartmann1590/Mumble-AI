@@ -241,7 +241,7 @@ class MumbleAIBot:
             logger.error(f"Error handling text message: {e}", exc_info=True)
 
     def process_text_message(self, message, sender_name, sender_session=0):
-        """Process a text message and send a text response"""
+        """Process a text message and send a text-only response"""
         try:
             # Save user's message to database
             self.save_message(sender_name, sender_session, 'text', 'user', message)
@@ -253,7 +253,7 @@ class MumbleAIBot:
             # Save assistant's response to database
             self.save_message(sender_name, sender_session, 'text', 'assistant', response_text)
 
-            # Send text response to channel
+            # Send text-only response (no TTS for text messages)
             self.mumble.my_channel().send_text_message(response_text)
             logger.info("Text response sent")
 

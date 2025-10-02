@@ -11,8 +11,10 @@ Common issues and solutions for Mumble AI Bot.
 **Solutions:**
 ```bash
 # Check if ports are already in use
-netstat -an | find "64738"
-netstat -an | find "5002"
+netstat -an | find "64738"  # Mumble
+netstat -an | find "5002"   # Web Control Panel
+netstat -an | find "8081"   # Mumble Web
+netstat -an | find "5060"   # SIP Bridge
 
 # Stop conflicting services
 docker-compose down
@@ -334,6 +336,156 @@ docker volume inspect mumble-ai_piper-voices
 docker-compose restart piper-tts web-control-panel
 ```
 
+## New Service Issues
+
+### SIP Bridge Issues
+
+#### SIP Call Not Answered
+
+**Symptom:** Phone calls to SIP bridge are not answered
+
+**Solutions:**
+```bash
+# Check SIP bridge logs
+docker logs sip-mumble-bridge
+
+# Verify SIP port is listening
+netstat -an | grep 5060
+
+# Check firewall rules
+sudo ufw status | grep 5060
+
+# Test SIP registration
+docker logs sip-mumble-bridge | grep "SIP account created"
+```
+
+#### No Audio on SIP Call
+
+**Symptom:** SIP call connects but no audio
+
+**Solutions:**
+```bash
+# Check RTP ports are open
+netstat -an | grep 10000
+
+# Verify Mumble server connection
+docker logs sip-mumble-bridge | grep "Connected to Mumble"
+
+# Check audio conversion logs
+docker logs sip-mumble-bridge | grep "Audio bridge"
+```
+
+#### SIP Bridge Can't Connect to Mumble
+
+**Symptom:** SIP bridge fails to connect to Mumble server
+
+**Solutions:**
+```bash
+# Check Mumble server is running
+docker ps | grep mumble-server
+
+# Test network connectivity
+docker exec sip-mumble-bridge ping mumble-server
+
+# Check Mumble server logs
+docker logs mumble-server
+```
+
+### Web Client Issues
+
+#### Web Client Not Loading
+
+**Symptom:** localhost:8081 shows error or doesn't load
+
+**Solutions:**
+```bash
+# Check web client container
+docker ps | grep mumble-web
+
+# Check logs
+docker logs mumble-web
+
+# Verify port mapping
+docker port mumble-web
+
+# Test connectivity
+curl http://localhost:8081
+```
+
+#### Web Client Can't Connect to Mumble
+
+**Symptom:** Web client loads but can't connect to Mumble server
+
+**Solutions:**
+```bash
+# Check Mumble server is running
+docker ps | grep mumble-server
+
+# Test network connectivity
+docker exec mumble-web ping mumble-server
+
+# Check Mumble server logs
+docker logs mumble-server
+
+# Verify Mumble server configuration
+docker exec mumble-server cat /etc/mumble-server.ini
+```
+
+#### Web Client Audio Issues
+
+**Symptom:** No audio in web client
+
+**Solutions:**
+```bash
+# Check browser console for errors
+# Open Developer Tools (F12) and check Console tab
+
+# Verify microphone permissions
+# Check browser microphone settings
+
+# Test with different browser
+# Try Chrome/Chromium for best compatibility
+
+# Check WebRTC support
+# Visit https://webrtc.github.io/samples/src/content/devices/input-output/
+```
+
+### Mumble Web Simple Build Issues
+
+#### Build Fails
+
+**Symptom:** `npm run build` fails
+
+**Solutions:**
+```bash
+# Check Node.js version
+node --version  # Should be >= 22.0.0
+
+# Clean and reinstall
+cd mumble-web-simple
+rm -rf node_modules package-lock.json
+npm ci
+
+# Check for specific errors
+npm run build 2>&1 | tee build.log
+```
+
+#### Build Succeeds But Client Doesn't Work
+
+**Symptom:** Build completes but web client has issues
+
+**Solutions:**
+```bash
+# Check if dist folder was created
+ls -la mumble-web-simple/dist/
+
+# Verify all files are present
+ls -la mumble-web-simple/dist/app/
+
+# Test with development build
+npm run build:dev
+```
+
 ## Common Error Messages
 
 ### "relation 'bot_config' does not exist"
@@ -378,6 +530,38 @@ docker-compose up -d mumble-bot
 
 # Verify installation
 docker exec mumble-bot ffmpeg -version
+```
+
+### "SIP account creation failed"
+
+**Cause:** SIP bridge can't create SIP account
+
+**Solution:**
+```bash
+# Check port 5060 is available
+netstat -an | grep 5060
+
+# Restart SIP bridge
+docker-compose restart sip-mumble-bridge
+
+# Check logs for specific error
+docker logs sip-mumble-bridge | grep -i error
+```
+
+### "WebRTC connection failed"
+
+**Cause:** Web client can't establish WebRTC connection
+
+**Solution:**
+```bash
+# Check Mumble server is accessible
+docker exec mumble-web ping mumble-server
+
+# Verify Mumble server configuration
+docker exec mumble-server cat /etc/mumble-server.ini | grep -i webrtc
+
+# Check browser compatibility
+# Try Chrome/Chromium browser
 ```
 
 ## Debug Mode

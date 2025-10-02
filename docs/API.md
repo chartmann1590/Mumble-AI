@@ -1,11 +1,20 @@
 # API Reference
 
-Complete API documentation for the Mumble AI Bot web control panel.
-
-Base URL: `http://localhost:5002`
+Complete API documentation for all Mumble AI Bot services.
 
 ## Table of Contents
 
+- [Web Control Panel API](#web-control-panel-api) (Port 5002)
+- [Faster Whisper API](#faster-whisper-api) (Port 5000)
+- [Piper TTS API](#piper-tts-api) (Port 5001)
+- [SIP Bridge](#sip-bridge) (Port 5060)
+- [Mumble Web Client](#mumble-web-client) (Port 8081)
+
+## Web Control Panel API
+
+Base URL: `http://localhost:5002`
+
+### Table of Contents
 - [Statistics](#statistics)
 - [Ollama Configuration](#ollama-configuration)
 - [Piper TTS](#piper-tts)
@@ -409,3 +418,188 @@ fetch('http://localhost:5002/api/conversations?limit=10')
 Currently, there is no WebSocket support. All communication is via HTTP REST API. Real-time updates are achieved through polling (the web UI refreshes stats every 10 seconds).
 
 Future versions may include WebSocket support for real-time notifications.
+
+## Faster Whisper API
+
+Base URL: `http://localhost:5000`
+
+Speech-to-text transcription service using Faster Whisper.
+
+### Health Check
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy"
+}
+```
+
+### Transcribe Audio
+
+**Endpoint:** `POST /transcribe`
+
+**Request:** Multipart form data with audio file
+- `audio`: Audio file (WAV format recommended)
+
+**Response:**
+```json
+{
+  "text": "Transcribed text from audio",
+  "language": "en",
+  "language_probability": 0.95
+}
+```
+
+**Error Response:**
+```json
+{
+  "error": "No audio file provided"
+}
+```
+
+**Notes:**
+- Supports various audio formats (WAV, MP3, etc.)
+- Uses the model size configured in environment (`WHISPER_MODEL`)
+- Returns detected language and confidence score
+
+## Piper TTS API
+
+Base URL: `http://localhost:5001`
+
+Text-to-speech synthesis service using Piper TTS.
+
+### Health Check
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy"
+}
+```
+
+### Synthesize Speech
+
+**Endpoint:** `POST /synthesize`
+
+**Request Body:**
+```json
+{
+  "text": "Text to synthesize into speech"
+}
+```
+
+**Response:** Audio file (WAV format)
+
+**Headers:**
+- `Content-Type: audio/wav`
+- `Content-Disposition: attachment; filename=speech.wav`
+
+**Error Response:**
+```json
+{
+  "error": "No text provided"
+}
+```
+
+**Notes:**
+- Uses the voice model configured in the database
+- Returns high-quality WAV audio
+- Audio is automatically cleaned up after sending
+
+## SIP Bridge
+
+The SIP bridge service provides SIP/RTP to Mumble integration but does not expose HTTP API endpoints. It operates as a SIP endpoint and Mumble client.
+
+### Configuration
+
+All configuration is done via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SIP_PORT` | 5060 | SIP signaling port |
+| `SIP_USERNAME` | mumble-bridge | SIP username |
+| `SIP_PASSWORD` | bridge123 | SIP password |
+| `SIP_DOMAIN` | * | Domain to accept calls from |
+| `RTP_PORT_MIN` | 10000 | Minimum RTP port |
+| `RTP_PORT_MAX` | 10010 | Maximum RTP port |
+| `LOG_LEVEL` | INFO | Logging verbosity |
+
+### Ports
+
+- **5060/udp**: SIP signaling (UDP)
+- **5060/tcp**: SIP signaling (TCP)
+- **10000-10010/udp**: RTP audio streams
+
+### Usage
+
+1. Configure your SIP client or phone system to point to `localhost:5060`
+2. Use the configured username and password
+3. Make a call - it will be automatically answered
+4. Speak to the AI bot through the phone
+5. Hang up when done
+
+## Mumble Web Client
+
+Base URL: `http://localhost:8081`
+
+Web-based Mumble client interface. This is a static web application that connects directly to the Mumble server.
+
+### Features
+
+- **WebRTC Audio**: Direct audio connection to Mumble server
+- **Text Chat**: Send and receive text messages
+- **Voice Activity Detection**: Automatic push-to-talk
+- **Modern UI**: Responsive design with themes
+- **No Installation**: Works in any modern browser
+
+### Configuration
+
+The web client automatically connects to the Mumble server at `mumble-server:64738`. No additional configuration is required.
+
+### Browser Compatibility
+
+- Chrome/Chromium (recommended)
+- Firefox
+- Safari (limited support)
+- Edge
+
+### Audio Requirements
+
+- Microphone access permission
+- Modern browser with WebRTC support
+- Good internet connection for audio quality
+
+## Mumble Web Simple
+
+A simplified web client that can be built locally for development or custom deployment.
+
+### Building
+
+```bash
+cd mumble-web-simple
+npm ci
+npm run build
+```
+
+### Development
+
+```bash
+cd mumble-web-simple
+npm run build:dev
+```
+
+### Testing
+
+```bash
+cd mumble-web-simple
+npm test
+```
+
+**Notes:**
+- This is a build-only service in the Docker setup
+- Use `mumble-web` service for the running web client
+- Supports the same features as the main web client

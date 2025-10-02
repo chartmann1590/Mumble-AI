@@ -4,44 +4,44 @@ System design and component interaction documentation.
 
 ## Overview
 
-Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 6 primary services that work together to provide voice and text interaction through Mumble VoIP.
+Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 9 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, and SIP phone integration.
 
 ## Component Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                       User Layer                              │
-│  ┌──────────────┐         ┌────────────────────────┐        │
-│  │Mumble Client │◄────────┤ Web Browser (Control)  │        │
-│  └──────┬───────┘         └────────────┬───────────┘        │
-└─────────┼──────────────────────────────┼────────────────────┘
-          │                               │
-┌─────────▼──────────────────────────────▼────────────────────┐
-│                    Application Layer                          │
-│  ┌──────────────────┐         ┌────────────────────┐        │
-│  │  Mumble Server   │◄────────┤ Web Control Panel  │        │
-│  │   (Port 64738)   │         │    (Port 5002)     │        │
-│  └─────────┬────────┘         └──────────┬─────────┘        │
-│            │                              │                   │
-│       ┌────▼──────┐                       │                   │
-│       │  AI Bot   │                       │                   │
-│       └─┬───┬───┬─┘                       │                   │
-│         │   │   │                         │                   │
-└─────────┼───┼───┼─────────────────────────┼──────────────────┘
-          │   │   │                         │
-┌─────────▼───▼───▼─────────────────────────▼──────────────────┐
-│                    Service Layer                              │
-│  ┌──────────┐  ┌────────┐  ┌─────────┐  ┌──────────────┐   │
-│  │ Faster   │  │ Piper  │  │ Ollama  │  │  PostgreSQL  │   │
-│  │ Whisper  │  │  TTS   │  │(Extern) │  │              │   │
-│  │(Port5000)│  │(5001)  │  │(11434)  │  │  (Internal)  │   │
-│  └──────────┘  └────────┘  └─────────┘  └──────────────┘   │
-└───────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            User Access Layer                                │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
+│  │Mumble Client │  │ Web Clients  │  │ SIP Phones   │  │ Web Browser     │ │
+│  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)  │  │(Control Panel)  │ │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
+└─────────┼──────────────────┼──────────────────┼───────────────────┼─────────┘
+          │                  │                  │                   │
+┌─────────▼──────────────────▼──────────────────▼───────────────────▼─────────┐
+│                        Application Layer                                      │
+│  ┌──────────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │  Mumble Server   │  │ SIP Bridge   │  │ Web Control  │  │ Mumble Web  │  │
+│  │   (Port 64738)   │  │(Port 5060)   │  │   Panel      │  │  Client     │  │
+│  └─────────┬────────┘  └──────┬───────┘  │(Port 5002)   │  │(Port 8081)  │  │
+│            │                  │          └──────────────┘  └─────────────┘  │
+│       ┌────▼──────┐           │                                            │
+│       │  AI Bot   │           │                                            │
+│       └─┬───┬───┬─┘           │                                            │
+└─────────┼───┼───┼─────────────┼────────────────────────────────────────────┘
+          │   │   │             │
+┌─────────▼───▼───▼─────────────▼────────────────────────────────────────────┐
+│                            Service Layer                                    │
+│  ┌──────────┐  ┌────────┐  ┌─────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │ Faster   │  │ Piper  │  │ Ollama  │  │  PostgreSQL  │  │ Mumble Web  │  │
+│  │ Whisper  │  │  TTS   │  │(External│  │              │  │   Simple    │  │
+│  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │(Build Only) │  │
+│  └──────────┘  └────────┘  └─────────┘  └──────────────┘  └─────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Data Flow
 
-### Voice Message Flow
+### Voice Message Flow (Mumble Client)
 
 1. User speaks in Mumble client
 2. Mumble Server transmits audio to AI Bot
@@ -61,9 +61,30 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 16. Audio sent back through Mumble Server
 17. User hears AI response
 
+### Voice Message Flow (Web Client)
+
+1. User speaks in web browser
+2. WebRTC audio sent to Mumble Server
+3. Mumble Server transmits audio to AI Bot
+4. Steps 3-16 same as Mumble client flow
+5. Audio sent back through Mumble Server to web client
+6. User hears AI response in browser
+
+### Voice Message Flow (SIP Phone)
+
+1. User calls SIP bridge from phone
+2. SIP bridge auto-answers call
+3. SIP bridge connects to Mumble Server as client
+4. Phone audio (RTP) converted to Mumble audio format
+5. Audio sent to Mumble Server → AI Bot
+6. Steps 4-15 same as Mumble client flow
+7. Audio sent back through Mumble Server → SIP bridge
+8. SIP bridge converts audio back to RTP format
+9. User hears AI response on phone
+
 ### Text Message Flow
 
-1. User types message in Mumble chat
+1. User types message in Mumble chat (any client)
 2. Message sent to AI Bot via Mumble Server
 3. Steps 6-12 same as voice flow
 4. Bot sends text response to Mumble Server
@@ -85,7 +106,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 ### 1. Mumble Server
 
 - **Image:** `mumblevoip/mumble-server:latest`
-- **Purpose:** VoIP communication
+- **Purpose:** VoIP communication hub
 - **Ports:** 64738 (TCP/UDP)
 - **Dependencies:** None
 - **Data:** Persistent volume for server state
@@ -107,7 +128,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 - **Purpose:** Speech-to-text transcription
 - **Port:** 5000
 - **Model:** Configurable (tiny/base/small/medium/large)
-- **API:** POST /transcribe
+- **API:** POST /transcribe, GET /health
 
 ### 4. Piper TTS
 
@@ -115,7 +136,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 - **Purpose:** Text-to-speech synthesis
 - **Port:** 5001
 - **Voices:** 31 pre-loaded models
-- **API:** POST /synthesize
+- **API:** POST /synthesize, GET /health
 
 ### 5. PostgreSQL
 
@@ -137,6 +158,39 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Model/voice selection
   - Persona management
   - History viewing
+
+### 7. SIP Bridge
+
+- **Image:** Custom (Python 3.11)
+- **Purpose:** SIP/RTP to Mumble integration
+- **Ports:** 5060 (UDP/TCP), 10000-10010 (UDP)
+- **Dependencies:** Mumble Server, Whisper, Piper, PostgreSQL, Ollama
+- **Features:**
+  - Auto-answer SIP calls
+  - RTP audio conversion
+  - Mumble client connection
+  - AI pipeline integration
+
+### 8. Mumble Web
+
+- **Image:** `rankenstein/mumble-web:latest`
+- **Purpose:** Web-based Mumble client
+- **Port:** 8081
+- **Features:**
+  - WebRTC audio connection
+  - Text chat interface
+  - Voice activity detection
+  - Modern responsive UI
+
+### 9. Mumble Web Simple
+
+- **Image:** Custom (Node.js build)
+- **Purpose:** Simplified web client (build only)
+- **Port:** N/A (build service)
+- **Features:**
+  - Lightweight web client
+  - Customizable themes
+  - Development-friendly
 
 ## Database Schema
 
@@ -212,12 +266,16 @@ mumble-ai-network (bridge)
 ├── faster-whisper (5000)
 ├── piper-tts (5001)
 ├── web-control-panel (5002)
+├── sip-mumble-bridge (5060, 10000-10010)
+├── mumble-web (8081)
 ├── postgres (5432 internal)
 └── mumble-bot (client only)
 ```
 
 External:
 - Ollama: host.docker.internal:11434
+- SIP Phones: localhost:5060
+- Web Browsers: localhost:8081, localhost:5002
 
 ## Monitoring
 

@@ -44,11 +44,37 @@ OLLAMA_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=llama3.2:latest
 ```
 
-## Web Control Panel
+### SIP Bridge Configuration
+
+```bash
+# SIP server settings
+SIP_PORT=5060
+SIP_USERNAME=mumble-bridge
+SIP_PASSWORD=bridge123
+SIP_DOMAIN=*  # Accept calls from any domain
+
+# RTP port range for audio streams
+RTP_PORT_MIN=10000
+RTP_PORT_MAX=10010
+
+# Logging level
+LOG_LEVEL=INFO
+```
+
+### Web Client Configuration
+
+```bash
+# Mumble Web client automatically connects to mumble-server:64738
+# No additional environment variables required
+```
+
+## Service Configuration
+
+### Web Control Panel
 
 Access: `http://localhost:5002`
 
-### Changing Ports
+#### Changing Ports
 
 Edit `docker-compose.yml`:
 
@@ -56,6 +82,79 @@ Edit `docker-compose.yml`:
 web-control-panel:
   ports:
     - "8080:5002"  # Change 8080 to your desired port
+```
+
+### SIP Bridge
+
+#### Port Configuration
+
+The SIP bridge uses multiple ports:
+
+```yaml
+sip-mumble-bridge:
+  ports:
+    - "5060:5060/udp"      # SIP signaling (UDP)
+    - "5060:5060/tcp"      # SIP signaling (TCP)
+    - "10000-10010:10000-10010/udp"  # RTP audio streams
+```
+
+#### Security Configuration
+
+For production use, restrict SIP access:
+
+```bash
+# In .env file
+SIP_DOMAIN=your-pbx-server-ip  # Instead of *
+SIP_PASSWORD=strong-password   # Use strong password
+```
+
+#### Firewall Rules
+
+```bash
+# Allow SIP only from your PBX server
+sudo ufw allow from <PBX_IP> to any port 5060 proto udp
+sudo ufw allow from <PBX_IP> to any port 5060 proto tcp
+sudo ufw allow from <PBX_IP> to any port 10000:10010 proto udp
+```
+
+### Mumble Web Client
+
+#### Port Configuration
+
+```yaml
+mumble-web:
+  ports:
+    - "8081:8080"  # External port 8081 maps to internal 8080
+```
+
+#### Custom Server Configuration
+
+The web client automatically connects to `mumble-server:64738`. To change this:
+
+1. Edit `docker-compose.yml`:
+```yaml
+mumble-web:
+  environment:
+    - MUMBLE_SERVER=your-server:64738
+```
+
+2. Or modify the client configuration after build.
+
+### Mumble Web Simple
+
+#### Build Configuration
+
+```bash
+cd mumble-web-simple
+npm ci
+npm run build
+```
+
+#### Development Mode
+
+```bash
+cd mumble-web-simple
+npm run build:dev
 ```
 
 ## Voice Configuration
@@ -256,6 +355,53 @@ docker exec mumble-ai-postgres psql -U mumbleai mumble_ai -c "SELECT * FROM bot_
 
 # Environment
 docker exec mumble-bot env | grep OLLAMA
+
+# SIP Bridge config
+docker exec sip-mumble-bridge env | grep SIP
+
+# Web client status
+docker exec mumble-web ps aux
+```
+
+### Service-Specific Troubleshooting
+
+#### SIP Bridge Issues
+
+```bash
+# Check SIP bridge logs
+docker logs sip-mumble-bridge
+
+# Test SIP port accessibility
+netstat -an | grep 5060
+
+# Verify RTP ports
+netstat -an | grep 10000
+```
+
+#### Web Client Issues
+
+```bash
+# Check web client logs
+docker logs mumble-web
+
+# Test web client connectivity
+curl http://localhost:8081
+
+# Check if Mumble server is accessible
+docker exec mumble-web ping mumble-server
+```
+
+#### Mumble Web Simple Build Issues
+
+```bash
+# Check build logs
+cd mumble-web-simple
+npm run build 2>&1 | tee build.log
+
+# Clean and rebuild
+rm -rf node_modules dist
+npm ci
+npm run build
 ```
 
 ### Reset to Defaults

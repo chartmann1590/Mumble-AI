@@ -66,7 +66,7 @@ services:
     networks:
       - mumble-ai-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mumbleai"]
+      test: ["CMD-SHELL", "pg_isready -U mumbleai -d mumble_ai"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -123,6 +123,55 @@ services:
       - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+  sip-mumble-bridge:
+    build:
+      context: ./sip-mumble-bridge
+      dockerfile: Dockerfile
+    container_name: sip-mumble-bridge
+    depends_on:
+      mumble-server:
+        condition: service_started
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "10000-10010:10000-10010/udp"
+    environment:
+      - SIP_PORT=5060
+      - SIP_USERNAME=${SIP_USERNAME:-mumble-bridge}
+      - SIP_PASSWORD=${SIP_PASSWORD:-bridge123}
+      - SIP_DOMAIN=*
+      - RTP_PORT_MIN=10000
+      - RTP_PORT_MAX=10010
+      - WHISPER_URL=http://faster-whisper:5000
+      - PIPER_URL=http://piper-tts:5001
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama2}
+      - LOG_LEVEL=DEBUG
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
+  mumble-web:
+    image: rankenstein/mumble-web:latest
+    container_name: mumble-web
+    depends_on:
+      mumble-server:
+        condition: service_started
+    ports:
+      - "8081:8080"
+    environment:
+      - MUMBLE_SERVER=mumble-server:64738
     restart: unless-stopped
     networks:
       - mumble-ai-network

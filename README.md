@@ -19,6 +19,12 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Context-Aware**: Remembers previous conversations for natural dialogue
 - **Custom Personas**: Define and AI-enhance bot personalities
 
+### 🌐 Multiple Access Methods
+- **Mumble Client**: Traditional desktop/mobile Mumble clients
+- **Web Clients**: Two web-based Mumble clients (simple and full-featured)
+- **SIP Bridge**: Connect traditional phones via SIP/RTP to Mumble
+- **Web Control Panel**: Management interface for configuration
+
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics and conversation monitoring
 - **Voice Selection**: Choose from 31+ diverse TTS voices (US, UK, Australian accents)
@@ -32,32 +38,39 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Health Checks**: Automatic service monitoring and recovery
 - **Audio Processing**: Professional-grade audio resampling (48kHz for Mumble)
 - **Database Persistence**: All configurations and history stored in PostgreSQL
+- **SIP Integration**: Full SIP/RTP implementation for phone system integration
 
 ## Architecture
 
 ```
-┌─────────────────┐
-│  Mumble Server  │
-└────────┬────────┘
-         │
-    ┌────▼─────┐
-    │ AI Bot   │
-    └──┬───┬───┘
-       │   │
-   ┌───▼───▼────────────────┐
-   │                        │
-┌──▼────────┐  ┌───────────▼─┐  ┌──────────────┐
-│  Faster   │  │  Piper TTS  │  │   Ollama     │
-│  Whisper  │  │  Service    │  │  (External)  │
-└───────────┘  └─────────────┘  └──────────────┘
-                      │
-              ┌───────▼────────┐
-              │   PostgreSQL   │
-              └───────┬────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    User Access Layer                        │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐   │
+│  │Mumble Client │  │ Web Clients  │  │  SIP Phones     │   │
+│  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)     │   │
+│  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘   │
+└─────────┼──────────────────┼───────────────────┼────────────┘
+          │                  │                   │
+┌─────────▼──────────────────▼───────────────────▼────────────┐
+│                  Mumble Server (Port 64738)                │
+└─────────┬──────────────────────────────────────────────────┘
+          │
+    ┌─────▼─────┐
+    │  AI Bot   │
+    └─┬───┬───┬─┘
+      │   │   │
+┌─────▼───▼───▼──────────────────────────────────────────────┐
+│                    Service Layer                           │
+│  ┌──────────┐  ┌────────┐  ┌─────────┐  ┌──────────────┐  │
+│  │ Faster   │  │ Piper  │  │ Ollama  │  │  PostgreSQL  │  │
+│  │ Whisper  │  │  TTS   │  │(External│  │              │  │
+│  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │
+│  └──────────┘  └────────┘  └─────────┘  └──────────────┘  │
+└─────────────────────────────────────────────────────────────┘
                       │
               ┌───────▼────────┐
               │ Web Control    │
-              │    Panel       │
+              │ Panel (5002)   │
               └────────────────┘
 ```
 
@@ -126,17 +139,34 @@ From here you can:
 - View conversation history
 - Monitor statistics
 
-### 5. Connect with Mumble Client
+### 5. Access the System
 
+#### Option A: Traditional Mumble Client
 1. Open your Mumble client
 2. Add a new server:
    - **Address:** `localhost`
    - **Port:** `64738`
    - **Username:** Your name
    - **Password:** Leave empty (unless you set one)
-
 3. Connect to the server
 4. You should see the AI bot in the channel
+
+#### Option B: Web Client
+1. Open your browser and navigate to:
+   ```
+   http://localhost:8081
+   ```
+2. Enter your username
+3. Connect to the server
+4. The AI bot will be available in the channel
+
+#### Option C: SIP Phone (Advanced)
+1. Configure your SIP client or phone system
+2. Point to `localhost:5060`
+3. Use credentials from `.env` file:
+   - **Username:** `mumble-bridge` (or your `SIP_USERNAME`)
+   - **Password:** `bridge123` (or your `SIP_PASSWORD`)
+4. Make a call - you'll be connected to the Mumble server
 
 ## Services
 
@@ -148,6 +178,9 @@ From here you can:
 | Web Control Panel | 5002 | Management interface |
 | PostgreSQL | 5432 | Database (internal) |
 | AI Bot | - | Mumble client |
+| SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
+| Mumble Web | 8081 | Web-based Mumble client |
+| Mumble Web Simple | - | Simplified web client (build only) |
 
 ## Usage
 
@@ -307,13 +340,11 @@ Mumble-AI/
 │   └── requirements.txt
 ├── faster-whisper-service/     # STT service
 │   ├── app.py
-│   ├── Dockerfile
-│   └── requirements.txt
+│   └── Dockerfile
 ├── piper-tts-service/          # TTS service
 │   ├── app.py
 │   ├── download_model.py
-│   ├── Dockerfile
-│   └── requirements.txt
+│   └── Dockerfile
 ├── web-control-panel/          # Management UI
 │   ├── app.py
 │   ├── download_voices.py
@@ -321,6 +352,22 @@ Mumble-AI/
 │   ├── requirements.txt
 │   └── templates/
 │       └── index.html
+├── sip-mumble-bridge/          # SIP/RTP bridge
+│   ├── bridge.py
+│   ├── config.py
+│   └── Dockerfile
+├── mumble-web/                 # Full web client
+│   ├── app/                    # Client application
+│   ├── themes/                 # UI themes
+│   └── Dockerfile
+├── mumble-web-simple/          # Simplified web client
+│   ├── app/                    # Client application
+│   ├── vendors/                # Third-party libraries
+│   ├── themes/                 # UI themes
+│   └── package.json
+├── models/                     # AI model storage
+│   ├── whisper/                # Whisper models
+│   └── piper/                  # Piper TTS models
 └── docs/                       # Documentation
     ├── ARCHITECTURE.md
     ├── API.md
