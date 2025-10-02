@@ -5,6 +5,7 @@ Complete API documentation for all Mumble AI Bot services.
 ## Table of Contents
 
 - [Web Control Panel API](#web-control-panel-api) (Port 5002)
+- [TTS Voice Generator API](#tts-voice-generator-api) (Port 5003)
 - [Faster Whisper API](#faster-whisper-api) (Port 5000)
 - [Piper TTS API](#piper-tts-api) (Port 5001)
 - [SIP Bridge](#sip-bridge) (Port 5060)
@@ -418,6 +419,138 @@ fetch('http://localhost:5002/api/conversations?limit=10')
 Currently, there is no WebSocket support. All communication is via HTTP REST API. Real-time updates are achieved through polling (the web UI refreshes stats every 10 seconds).
 
 Future versions may include WebSocket support for real-time notifications.
+
+## TTS Voice Generator API
+
+Base URL: `http://localhost:5003`
+
+### Table of Contents
+- [Voice Catalog](#voice-catalog)
+- [Text Synthesis](#text-synthesis)
+- [Voice Preview](#voice-preview)
+
+### Voice Catalog
+
+#### Get Voice Catalog
+
+Retrieve the complete voice catalog with filtering options.
+
+**Endpoint:** `GET /api/voices`
+
+**Response:**
+```json
+{
+  "en_US": {
+    "name": "English (US)",
+    "voices": {
+      "male": [
+        {
+          "id": "en_US-lessac-medium",
+          "name": "Lessac (Medium)",
+          "quality": "medium"
+        }
+      ],
+      "female": [
+        {
+          "id": "en_US-lessac-medium",
+          "name": "Lessac (Medium)",
+          "quality": "medium"
+        }
+      ]
+    }
+  },
+  "en_GB": {
+    "name": "English (UK)",
+    "voices": {
+      "male": [...],
+      "female": [...]
+    }
+  }
+}
+```
+
+**Notes:**
+- Voices are organized by language/region code
+- Each region contains male and female voice options
+- Quality levels: low, medium, high
+
+### Text Synthesis
+
+#### Generate TTS Audio
+
+Generate text-to-speech audio from text input and voice selection.
+
+**Endpoint:** `POST /api/synthesize`
+
+**Request Body:**
+```json
+{
+  "text": "Hello, this is a test of the text-to-speech system.",
+  "voice": "en_US-lessac-medium"
+}
+```
+
+**Response:** WAV audio file (binary)
+
+**Headers:**
+- `Content-Type: audio/wav`
+- `Content-Disposition: attachment; filename="speech_[voice]_[hash].wav"`
+
+**Error Responses:**
+- `400 Bad Request`: Missing or invalid text/voice
+- `500 Internal Server Error`: TTS generation failed
+
+**Notes:**
+- Text must be a string and not empty
+- Voice must exist in the catalog
+- Maximum text length: 5000 characters
+- Generated audio is in WAV format
+
+### Voice Preview
+
+#### Generate Voice Preview
+
+Generate a short preview of the selected voice with sample text.
+
+**Endpoint:** `POST /api/preview`
+
+**Request Body:**
+```json
+{
+  "voice": "en_US-lessac-medium"
+}
+```
+
+**Response:** WAV audio file (binary)
+
+**Headers:**
+- `Content-Type: audio/wav`
+- `Content-Disposition: attachment; filename="preview_[voice]_[hash].wav"`
+
+**Error Responses:**
+- `400 Bad Request`: Missing or invalid voice
+- `500 Internal Server Error`: TTS generation failed
+
+**Notes:**
+- Uses predefined sample text: "Hello! This is a preview of this voice. How does it sound?"
+- Useful for testing voices before generating full audio
+- Same audio quality as full synthesis
+
+### Error Handling
+
+All endpoints return appropriate HTTP status codes and error messages:
+
+**Common Error Responses:**
+```json
+{
+  "error": "Error description"
+}
+```
+
+**Status Codes:**
+- `200 OK`: Success
+- `400 Bad Request`: Invalid input data
+- `500 Internal Server Error`: Server error
 
 ## Faster Whisper API
 

@@ -68,10 +68,28 @@ def synthesize():
             return jsonify({'error': 'No text provided'}), 400
 
         text = data['text']
+        voice_id = data.get('voice')  # Optional voice parameter
+        
+        logging.info(f"Received data: {data}")
+        logging.info(f"Text type: {type(text)}, Text value: {text}")
+        logging.info(f"Voice type: {type(voice_id)}, Voice value: {voice_id}")
+        
+        # Ensure text is a string
+        if not isinstance(text, str):
+            logging.error(f"Text is not a string: {type(text)} = {text}")
+            return jsonify({'error': 'Text must be a string'}), 400
+        
         logging.info(f"Synthesizing: {text[:50]}...")
 
-        # Get current voice model
-        model_path = get_current_voice()
+        # Get voice model - use specified voice or current default
+        if voice_id:
+            model_path = f"/app/models/{voice_id}.onnx"
+            if not os.path.exists(model_path):
+                logging.warning(f"Voice model {model_path} not found, using default")
+                model_path = get_current_voice()
+        else:
+            model_path = get_current_voice()
+            
         logging.info(f"Using voice model: {model_path}")
 
         # Create temporary output file

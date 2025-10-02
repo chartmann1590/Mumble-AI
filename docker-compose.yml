@@ -176,6 +176,22 @@ services:
     networks:
       - mumble-ai-network
 
+  tts-web-interface:
+    build:
+      context: ./tts-web-interface
+      dockerfile: Dockerfile
+    container_name: tts-web-interface
+    depends_on:
+      piper-tts:
+        condition: service_started
+    ports:
+      - "5003:5003"
+    environment:
+      - PIPER_TTS_URL=http://piper-tts:5001
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
 networks:
   mumble-ai-network:
     driver: bridge

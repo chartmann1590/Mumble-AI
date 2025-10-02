@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTS Voice Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-microphone-alt"></i> TTS Voice Generator</h1>
+                <p>Generate high-quality text-to-speech audio with diverse voices from around the world</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Text Input Section -->
+            <section class="input-section">
+                <div class="input-group">
+                    <label for="text-input" class="input-label">
+                        <i class="fas fa-edit"></i> Enter your text
+                    </label>
+                    <textarea 
+                        id="text-input" 
+                        class="text-input" 
+                        placeholder="Type or paste your text here... (Maximum 5000 characters)"
+                        maxlength="5000"
+                        rows="4"
+                    ></textarea>
+                    <div class="char-count">
+                        <span id="char-count">0</span> / 5000 characters
+                    </div>
+                </div>
+            </section>
+
+            <!-- Voice Selection Section -->
+            <section class="voice-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-voice"></i> Select Voice</h2>
+                    <div class="filter-controls">
+                        <select id="region-filter" class="filter-select">
+                            <option value="">All Regions</option>
+                        </select>
+                        <select id="gender-filter" class="filter-select">
+                            <option value="">All Genders</option>
+                            <option value="female">Female</option>
+                            <option value="male">Male</option>
+                            <option value="multi">Multi-Speaker</option>
+                        </select>
+                        <select id="quality-filter" class="filter-select">
+                            <option value="">All Qualities</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                            <option value="x_low">X-Low</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="voice-grid" id="voice-grid">
+                    <!-- Voices will be populated by JavaScript -->
+                </div>
+            </section>
+
+            <!-- Controls Section -->
+            <section class="controls-section">
+                <div class="control-buttons">
+                    <button id="preview-btn" class="btn btn-secondary" disabled>
+                        <i class="fas fa-play"></i> Preview Voice
+                    </button>
+                    <button id="generate-btn" class="btn btn-primary" disabled>
+                        <i class="fas fa-download"></i> Generate & Download
+                    </button>
+                </div>
+                
+                <div class="status-message" id="status-message"></div>
+            </section>
+
+            <!-- Audio Player Section -->
+            <section class="audio-section" id="audio-section" style="display: none;">
+                <div class="audio-player">
+                    <h3><i class="fas fa-headphones"></i> Generated Audio</h3>
+                    <audio id="audio-player" controls class="audio-controls">
+                        Your browser does not support the audio element.
+                    </audio>
+                    <div class="audio-info">
+                        <span id="selected-voice-name"></span>
+                        <span id="audio-duration"></span>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2024 TTS Voice Generator. Powered by Piper TTS.</p>
+        </footer>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Generating audio...</p>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -24,6 +24,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Web Clients**: Two web-based Mumble clients (simple and full-featured)
 - **SIP Bridge**: Connect traditional phones via SIP/RTP to Mumble
 - **Web Control Panel**: Management interface for configuration
+- **TTS Voice Generator**: Beautiful web interface for generating and downloading TTS audio
 
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics and conversation monitoring
@@ -31,6 +32,16 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Model Management**: Switch between Ollama models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
 - **History Management**: View and clear conversation history
+
+### 🎵 TTS Voice Generator
+- **Beautiful Web Interface**: Modern, responsive design with gradient backgrounds
+- **50+ Voice Options**: Comprehensive voice catalog from 9 languages and regions
+- **Advanced Filtering**: Filter voices by region, gender, and quality level
+- **Real-Time Preview**: Test voices before generating full audio
+- **Text Input Validation**: Character counting and input validation (up to 5000 chars)
+- **Audio Player**: Built-in player with duration display
+- **Download Support**: Generate and download high-quality WAV files
+- **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
 
 ### 🔧 Technical Features
 - **Docker Compose**: Full stack deployment with one command
@@ -49,6 +60,10 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 │  │Mumble Client │  │ Web Clients  │  │  SIP Phones     │   │
 │  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)     │   │
 │  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘   │
+│         │                 │                   │            │
+│  ┌──────▼─────────────────▼───────────────────▼────────┐   │
+│  │           TTS Voice Generator (Port 5003)          │   │
+│  └────────────────────────────────────────────────────┘   │
 └─────────┼──────────────────┼───────────────────┼────────────┘
           │                  │                   │
 ┌─────────▼──────────────────▼───────────────────▼────────────┐
@@ -65,7 +80,11 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 │  │ Faster   │  │ Piper  │  │ Ollama  │  │  PostgreSQL  │  │
 │  │ Whisper  │  │  TTS   │  │(External│  │              │  │
 │  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │
-│  └──────────┘  └────────┘  └─────────┘  └──────────────┘  │
+│  └──────────┘  └────┬───┘  └─────────┘  └──────────────┘  │
+│                     │                                     │
+│  ┌──────────────────▼─────────────────────────────────┐  │
+│  │         TTS Voice Generator (Port 5003)           │  │
+│  └────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                       │
               ┌───────▼────────┐
@@ -176,6 +195,7 @@ From here you can:
 | Faster Whisper | 5000 | Speech-to-text API |
 | Piper TTS | 5001 | Text-to-speech API |
 | Web Control Panel | 5002 | Management interface |
+| TTS Voice Generator | 5003 | Voice generation web interface |
 | PostgreSQL | 5432 | Database (internal) |
 | AI Bot | - | Mumble client |
 | SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
@@ -197,6 +217,25 @@ From here you can:
 
 1. Send a text message in Mumble chat
 2. The bot will respond with a text message
+
+### TTS Voice Generator
+
+Access at `http://localhost:5003`
+
+**Features**
+- **Voice Selection**: Choose from 50+ voices across 9 languages and regions
+- **Advanced Filtering**: Filter by region, gender, and quality level
+- **Text Input**: Enter up to 5000 characters for synthesis
+- **Real-Time Preview**: Test voices with sample text before generating
+- **Audio Player**: Built-in player with duration display
+- **Download Support**: Generate and download high-quality WAV files
+- **Mobile Responsive**: Works on all devices
+
+**Usage**
+1. Select a voice from the filtered list
+2. Enter your text (up to 5000 characters)
+3. Click "Preview Voice" to test the voice
+4. Click "Generate & Download" to create the audio file
 
 ### Web Control Panel Features
 
