@@ -1,14 +1,16 @@
 # TTS Voice Generator
 
-A beautiful web interface for generating and downloading text-to-speech audio using the Piper TTS service.
+A standalone web interface for generating and downloading text-to-speech audio using the Piper TTS service.
 
 ## Overview
 
-The TTS Voice Generator provides a modern, responsive web interface that allows users to:
+The TTS Voice Generator is an **independent service** that provides a modern, responsive web interface for users to:
 - Select from 50+ high-quality voices across 9 languages and regions
 - Generate TTS audio from custom text input
 - Preview voices before generating full audio
 - Download high-quality WAV files
+
+**Key Point**: This service operates independently from the main Mumble-AI system and only uses the Piper TTS service on-demand when generating audio files.
 
 ## Features
 
@@ -38,11 +40,20 @@ The TTS Voice Generator provides a modern, responsive web interface that allows 
 
 ## Technical Architecture
 
+### Standalone Design
+The TTS Voice Generator is designed as a **completely independent service** that:
+- Runs on its own port (5003)
+- Has its own web interface and API
+- Only communicates with Piper TTS when generating audio
+- Does not depend on any other Mumble-AI services
+- Can be used independently for voice generation needs
+
 ### Backend (Flask)
 - **Framework**: Flask 2.3.3
 - **API Endpoints**: RESTful API for voice catalog and synthesis
 - **Error Handling**: Comprehensive error handling and logging
 - **File Management**: Temporary file handling for audio generation
+- **Piper Integration**: On-demand communication with Piper TTS service
 
 ### Frontend (Vanilla JavaScript)
 - **No Dependencies**: Pure JavaScript, no external libraries
