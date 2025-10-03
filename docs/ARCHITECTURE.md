@@ -74,13 +74,16 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 
 1. User calls SIP bridge from phone
 2. SIP bridge auto-answers call
-3. SIP bridge connects to Mumble Server as client
-4. Phone audio (RTP) converted to Mumble audio format
-5. Audio sent to Mumble Server → AI Bot
-6. Steps 4-15 same as Mumble client flow
-7. Audio sent back through Mumble Server → SIP bridge
-8. SIP bridge converts audio back to RTP format
-9. User hears AI response on phone
+3. **Welcome message generated using bot persona and Ollama**
+4. **Welcome message converted to speech via TTS**
+5. **Welcome message played to caller over RTP**
+6. SIP bridge connects to Mumble Server as client
+7. Phone audio (RTP) converted to Mumble audio format
+8. Audio sent to Mumble Server → AI Bot
+9. Steps 4-15 same as Mumble client flow
+10. Audio sent back through Mumble Server → SIP bridge
+11. SIP bridge converts audio back to RTP format
+12. User hears AI response on phone
 
 ### Text Message Flow
 
@@ -167,6 +170,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 - **Dependencies:** Mumble Server, Whisper, Piper, PostgreSQL, Ollama
 - **Features:**
   - Auto-answer SIP calls
+  - **Personalized welcome messages using bot persona and Ollama**
   - RTP audio conversion
   - Mumble client connection
   - AI pipeline integration

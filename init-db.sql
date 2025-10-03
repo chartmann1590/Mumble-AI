@@ -35,11 +35,12 @@ CREATE TABLE IF NOT EXISTS bot_config (
 );
 
 -- Insert default configuration values
-INSERT INTO bot_config (key, value) VALUES 
+INSERT INTO bot_config (key, value) VALUES
     ('ollama_url', 'http://host.docker.internal:11434'),
     ('ollama_model', 'llama3.2:latest'),
     ('piper_voice', 'en_US-lessac-medium'),
-    ('bot_persona', '')
+    ('bot_persona', ''),
+    ('whisper_language', 'auto')
 ON CONFLICT (key) DO NOTHING;
 
 COMMENT ON TABLE conversation_history IS 'Stores all conversation history between users and the AI bot';

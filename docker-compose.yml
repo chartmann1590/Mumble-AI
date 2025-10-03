@@ -23,12 +23,19 @@ services:
       - "5000:5000"
     environment:
       - MODEL_SIZE=${WHISPER_MODEL:-base}
-      - DEVICE=cpu
+      - DEVICE=cuda
     volumes:
       - ./models/whisper:/app/models
     restart: unless-stopped
     networks:
       - mumble-ai-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   piper-tts:
     build:
@@ -107,6 +114,8 @@ services:
         condition: service_started
       piper-tts:
         condition: service_started
+    ports:
+      - "8082:8080"  # Health check port
     environment:
       - MUMBLE_HOST=mumble-server
       - MUMBLE_PORT=64738
@@ -121,9 +130,31 @@ services:
       - DB_NAME=${POSTGRES_DB:-mumble_ai}
       - DB_USER=${POSTGRES_USER:-mumbleai}
       - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      # Retry configuration
+      - RETRY_MAX_ATTEMPTS=${RETRY_MAX_ATTEMPTS:-3}
+      - RETRY_BASE_DELAY=${RETRY_BASE_DELAY:-1.0}
+      - RETRY_MAX_DELAY=${RETRY_MAX_DELAY:-60.0}
+      # Circuit breaker configuration
+      - WHISPER_CIRCUIT_THRESHOLD=${WHISPER_CIRCUIT_THRESHOLD:-5}
+      - WHISPER_CIRCUIT_TIMEOUT=${WHISPER_CIRCUIT_TIMEOUT:-60.0}
+      - PIPER_CIRCUIT_THRESHOLD=${PIPER_CIRCUIT_THRESHOLD:-5}
+      - PIPER_CIRCUIT_TIMEOUT=${PIPER_CIRCUIT_TIMEOUT:-60.0}
+      - OLLAMA_CIRCUIT_THRESHOLD=${OLLAMA_CIRCUIT_THRESHOLD:-5}
+      - OLLAMA_CIRCUIT_TIMEOUT=${OLLAMA_CIRCUIT_TIMEOUT:-60.0}
+      - DB_CIRCUIT_THRESHOLD=${DB_CIRCUIT_THRESHOLD:-3}
+      - DB_CIRCUIT_TIMEOUT=${DB_CIRCUIT_TIMEOUT:-30.0}
+      # Health check configuration
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30.0}
+      - HEALTH_PORT=8080
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - mumble-ai-network
 

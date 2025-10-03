@@ -32,19 +32,25 @@ def transcribe():
 
         audio_file = request.files['audio']
 
+        # Get optional language parameter from form data
+        language = request.form.get('language', None)
+        if language and language.lower() == 'auto':
+            language = None  # None means auto-detect
+
         # Save to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
             audio_file.save(tmp_file.name)
             tmp_path = tmp_file.name
 
         try:
-            # Transcribe
-            segments, info = model.transcribe(tmp_path, beam_size=5)
+            # Transcribe with beam_size=1 for faster performance
+            # Pass language parameter if specified (None for auto-detection)
+            segments, info = model.transcribe(tmp_path, beam_size=1, language=language)
 
             # Collect all segments
             text = ' '.join([segment.text for segment in segments])
 
-            logging.info(f"Transcribed: {text}")
+            logging.info(f"Transcribed: {text} (language: {info.language})")
 
             return jsonify({
                 'text': text.strip(),

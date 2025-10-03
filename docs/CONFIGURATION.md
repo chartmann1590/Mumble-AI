@@ -59,6 +59,9 @@ RTP_PORT_MAX=10010
 
 # Logging level
 LOG_LEVEL=INFO
+
+# Welcome message uses bot_persona from database
+# Configure via web control panel or directly in database
 ```
 
 ### Web Client Configuration

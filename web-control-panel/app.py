@@ -53,6 +53,10 @@ def init_config_table():
         INSERT INTO bot_config (key, value) VALUES ('bot_persona', '')
         ON CONFLICT (key) DO NOTHING
     """)
+    cursor.execute("""
+        INSERT INTO bot_config (key, value) VALUES ('whisper_language', 'auto')
+        ON CONFLICT (key) DO NOTHING
+    """)
 
     conn.commit()
     cursor.close()
@@ -406,6 +410,33 @@ Enhanced persona:"""
     except Exception as e:
         print(f"Error enhancing persona: {e}")
         return jsonify({'error': str(e)}), 500
+
+# Whisper Language Configuration
+@app.route('/api/whisper/language', methods=['GET'])
+def get_whisper_language():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'whisper_language'")
+    result = cursor.fetchone()
+    language = result[0] if result else 'auto'
+    cursor.close()
+    conn.close()
+
+    return jsonify({'language': language})
+
+@app.route('/api/whisper/language', methods=['POST'])
+def set_whisper_language():
+    data = request.json
+    language = data.get('language', 'auto')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'whisper_language'", (language,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'success': True})
 
 # Statistics
 @app.route('/api/stats', methods=['GET'])

@@ -22,7 +22,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 ### 🌐 Multiple Access Methods
 - **Mumble Client**: Traditional desktop/mobile Mumble clients
 - **Web Clients**: Two web-based Mumble clients (simple and full-featured)
-- **SIP Bridge**: Connect traditional phones via SIP/RTP to Mumble
+- **SIP Bridge**: Connect traditional phones via SIP/RTP to Mumble with personalized welcome messages
 - **Web Control Panel**: Management interface for configuration
 - **TTS Voice Generator**: Beautiful web interface for generating and downloading TTS audio
 
@@ -192,7 +192,7 @@ From here you can:
 3. Use credentials from `.env` file:
    - **Username:** `mumble-bridge` (or your `SIP_USERNAME`)
    - **Password:** `bridge123` (or your `SIP_PASSWORD`)
-4. Make a call - you'll be connected to the Mumble server
+4. Make a call - you'll hear a personalized welcome message and be connected to the AI assistant
 
 ## Services
 

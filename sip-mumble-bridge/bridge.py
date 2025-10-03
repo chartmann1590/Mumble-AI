@@ -676,8 +676,16 @@ class AIPipeline:
 
     def transcribe_wav_file(self, wav_path):
         try:
+            # Get language setting from database
+            language = self.get_config('whisper_language', 'auto')
+
             with open(wav_path, 'rb') as f:
-                resp = requests.post(f"{self.whisper_url}/transcribe", files={'audio': f}, timeout=60)
+                resp = requests.post(
+                    f"{self.whisper_url}/transcribe",
+                    files={'audio': f},
+                    data={'language': language},
+                    timeout=60
+                )
             if resp.status_code == 200:
                 return resp.json().get('text', '').strip()
             logger.error(f"Whisper error: {resp.text}")

@@ -1,11 +1,16 @@
-FROM python:3.10-slim
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Install system dependencies
+# Install Python and system dependencies
 RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# Create symlink for python
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
