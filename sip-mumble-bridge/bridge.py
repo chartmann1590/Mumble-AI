@@ -807,10 +807,13 @@ class CallSession:
             logger.info(f"Starting call session with {self.sip_call.caller_addr}")
 
             self.active = True
+            
+            # Play welcome message first
+            self._play_welcome_message()
+            
             # Start RTP receive thread (handles VAD -> STT -> LLM -> TTS)
             self.rtp_thread = threading.Thread(target=self._rtp_receive_loop, daemon=True)
             self.rtp_thread.start()
-
 
             logger.info("Call session active with RTP audio")
             return True
@@ -965,6 +968,91 @@ class CallSession:
             return "SIP-Caller"
         except Exception:
             return "SIP-Caller"
+
+    def _play_welcome_message(self):
+        """Generate and play a personalized welcome message using persona and Ollama"""
+        try:
+            logger.info("Generating welcome message...")
+            
+            # Generate welcome message using persona and Ollama
+            welcome_text = self._generate_welcome_message()
+            
+            if welcome_text:
+                logger.info(f"Playing welcome message: {welcome_text}")
+                
+                # Convert to speech and play over RTP
+                wav_bytes = self.pipeline.tts_wav(welcome_text)
+                if wav_bytes:
+                    self.pipeline.play_tts_over_rtp(self.sip_call, wav_bytes)
+                    logger.info("Welcome message played successfully")
+                else:
+                    logger.error("Failed to generate TTS for welcome message")
+            else:
+                logger.warning("No welcome message generated, using default")
+                # Fallback to a simple default message
+                default_welcome = "Hello! I'm your AI assistant. How can I help you today?"
+                wav_bytes = self.pipeline.tts_wav(default_welcome)
+                if wav_bytes:
+                    self.pipeline.play_tts_over_rtp(self.sip_call, wav_bytes)
+                    
+        except Exception as e:
+            logger.error(f"Error playing welcome message: {e}")
+            # Don't fail the call if welcome message fails
+            pass
+
+    def _generate_welcome_message(self):
+        """Generate a personalized welcome message using persona and Ollama"""
+        try:
+            # Get bot persona from config
+            persona = self.pipeline.get_config('bot_persona', '')
+            
+            # Build a prompt specifically for welcome message generation
+            welcome_prompt = self._build_welcome_prompt(persona)
+            
+            # Get Ollama configuration
+            ollama_url = self.pipeline.get_config('ollama_url', config.DEFAULT_OLLAMA_URL)
+            ollama_model = self.pipeline.get_config('ollama_model', config.DEFAULT_OLLAMA_MODEL)
+            
+            logger.info(f"Generating welcome message using Ollama: {ollama_url} with model: {ollama_model}")
+            
+            # Call Ollama to generate welcome message
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json={"model": ollama_model, "prompt": welcome_prompt, "stream": False},
+                timeout=30,  # Shorter timeout for welcome message
+            )
+            
+            if response.status_code == 200:
+                welcome_text = response.json().get('response', '').strip()
+                if welcome_text:
+                    # Clean up the response (remove any assistant prefix if present)
+                    welcome_text = welcome_text.replace('Assistant:', '').strip()
+                    return welcome_text
+                else:
+                    logger.warning("Ollama returned empty response for welcome message")
+                    return None
+            else:
+                logger.error(f"Ollama error generating welcome message: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error generating welcome message: {e}")
+            return None
+
+    def _build_welcome_prompt(self, persona):
+        """Build a prompt specifically for generating welcome messages"""
+        prompt = "Generate a brief, friendly welcome message for when someone calls you. "
+        prompt += "Keep it conversational and welcoming (1-2 sentences). "
+        prompt += "Never use emojis. "
+        
+        if persona and persona.strip():
+            prompt += f"Use this persona: {persona.strip()}\n\n"
+        else:
+            prompt += "\n\n"
+            
+        prompt += "Generate a welcome message for an incoming phone call:"
+        
+        return prompt
 
 
 class SIPMumbleBridge:

@@ -21,6 +21,7 @@ Phone → VitalPBX → SIP Call → sip-mumble-bridge → Mumble Server → AI B
 ## Features
 
 - ✅ Auto-answer incoming SIP calls
+- ✅ **Personalized welcome messages** using bot persona and Ollama
 - ✅ Automatic Mumble connection on call start
 - ✅ Bidirectional audio streaming
 - ✅ Automatic cleanup on call end
@@ -68,10 +69,20 @@ docker logs -f sip-mumble-bridge
 ### Making a Call
 
 1. From any phone on your network, dial the extension configured in VitalPBX
-2. The bridge will auto-answer
+2. The bridge will auto-answer and play a personalized welcome message
 3. Speak to the AI bot
 4. The AI will respond with voice
 5. Hang up when done
+
+### Welcome Message
+
+The bridge now plays a personalized welcome message when answering calls:
+- Uses the bot's persona from the database configuration
+- Generated dynamically using Ollama for contextually appropriate greetings
+- Spoken using the TTS service before normal conversation begins
+- Falls back to a default message if persona is not configured
+
+See [WELCOME_MESSAGE_FEATURE.md](WELCOME_MESSAGE_FEATURE.md) for detailed configuration and troubleshooting.
 
 ## Testing
 
