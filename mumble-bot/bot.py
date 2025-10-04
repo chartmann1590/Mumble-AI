@@ -498,14 +498,13 @@ class MumbleAIBot:
     def process_text_message(self, message, sender_name, sender_session=0):
         """Process a text message and send a text-only response"""
         try:
-            # Save user's message to database
-            self.save_message(sender_name, sender_session, 'text', 'user', message)
-
+            # Get Ollama response FIRST (before saving to avoid duplication in history)
             logger.info(f"Getting Ollama response for text from {sender_name}...")
             response_text = self.get_ollama_response(message, user_name=sender_name)
             logger.info(f"Ollama text response: {response_text}")
 
-            # Save assistant's response to database
+            # Now save both messages to database (after getting response)
+            self.save_message(sender_name, sender_session, 'text', 'user', message)
             self.save_message(sender_name, sender_session, 'text', 'assistant', response_text)
 
             # Send text-only response (no TTS for text messages)
