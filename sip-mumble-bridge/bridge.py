@@ -807,13 +807,16 @@ class CallSession:
         self.active = False
         self.rtp_thread = None
         self.pipeline = AIPipeline()
-        # Voice activity detection on 8kHz PCM
-        self.voice_threshold = 500  # empirical
-        self.silence_threshold = 1.5  # seconds
+        # Voice activity detection on 8kHz PCM - lowered threshold for better detection
+        self.voice_threshold = 100  # lowered from 500 for better SIP audio detection
+        self.silence_threshold = 2.0  # seconds - increased for better utterance capture
         self.recording = False
         self.last_audio_time = None
         self.audio_buffer_8k = []  # list of 16-bit PCM @8kHz
         self.processing = False
+        # RMS monitoring for debugging
+        self.rms_samples = []
+        self.max_rms = 0
         # Identify caller
         self.caller_name = self._extract_caller_name()
         self.user_session = 0
@@ -866,12 +869,23 @@ class CallSession:
                     pcm_8k = audioop.ulaw2lin(payload, 1)
                     # Voice activity detection
                     rms = audioop.rms(pcm_8k, 2)
+
+                    # Track RMS statistics
+                    self.rms_samples.append(rms)
+                    if rms > self.max_rms:
+                        self.max_rms = rms
+
+                    # Log RMS levels periodically for debugging
+                    if packet_count % 200 == 1:
+                        avg_rms = sum(self.rms_samples[-200:]) / min(len(self.rms_samples), 200)
+                        logger.debug(f"Audio stats - Current RMS: {rms}, Avg RMS: {avg_rms:.1f}, Max RMS: {self.max_rms}, Threshold: {self.voice_threshold}")
+
                     if rms > self.voice_threshold:
                         self.audio_buffer_8k.append(pcm_8k)
                         self.last_audio_time = time.time()
                         if not self.recording:
                             self.recording = True
-                            logger.info("Started recording from caller")
+                            logger.info(f"Started recording from caller (RMS: {rms}, threshold: {self.voice_threshold})")
                     elif self.recording:
                         # still buffer tail during trailing silence
                         self.audio_buffer_8k.append(pcm_8k)
@@ -908,16 +922,50 @@ class CallSession:
 
     def _process_utterance(self, chunks_8k):
         try:
-            logger.info("Silence detected, transcribing audio...")
-            # Write PCM 8k 16-bit chunks to WAV
+            logger.info(f"Silence detected, processing and transcribing audio ({len(chunks_8k)} chunks)...")
+
+            if not chunks_8k:
+                logger.warning("No audio chunks to process")
+                self.processing = False
+                return
+
+            # Combine all 8kHz chunks
+            combined_8k = b''.join(chunks_8k)
+            duration_8k = len(combined_8k) / 2 / 8000  # 16-bit samples at 8kHz
+            logger.info(f"Processing {duration_8k:.2f} seconds of audio ({len(combined_8k)} bytes @ 8kHz)")
+
+            # Check if we have enough audio
+            if duration_8k < 0.3:  # Less than 300ms
+                logger.warning(f"Audio too short ({duration_8k:.2f}s), skipping transcription")
+                self.processing = False
+                return
+
+            # Upsample from 8kHz to 16kHz for better Whisper accuracy
+            logger.debug(f"Upsampling audio from 8kHz to 16kHz")
+            combined_16k, _ = audioop.ratecv(combined_8k, 2, 1, 8000, 16000, None)
+
+            # Apply audio normalization to improve quality
+            # Find peak amplitude
+            max_amp = audioop.max(combined_16k, 2)
+            avg_amp = audioop.rms(combined_16k, 2)
+            logger.info(f"Audio levels - Peak: {max_amp}, RMS: {avg_amp}")
+
+            if max_amp > 0:
+                # Normalize to 90% of maximum to avoid clipping while maximizing signal
+                target_amp = int(32767 * 0.9)
+                factor = target_amp / max_amp
+                combined_16k = audioop.mul(combined_16k, 2, factor)
+                logger.info(f"Normalized audio by factor {factor:.2f}")
+
+            # Write enhanced 16kHz PCM to WAV
             with tempfile_named(suffix='.wav') as wav_path:
                 with wave.open(wav_path, 'wb') as w:
                     w.setnchannels(1)
                     w.setsampwidth(2)
-                    w.setframerate(8000)
-                    for ch in chunks_8k:
-                        w.writeframes(ch)
+                    w.setframerate(16000)  # 16kHz for better Whisper performance
+                    w.writeframes(combined_16k)
 
+                logger.info("Sending audio to Whisper for transcription...")
                 # Transcribe
                 transcript = self.pipeline.transcribe_wav_file(wav_path)
 
