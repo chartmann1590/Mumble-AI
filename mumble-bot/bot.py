@@ -195,6 +195,7 @@ class MumbleAIBot:
 
         self.whisper_url = os.getenv('WHISPER_URL', 'http://faster-whisper:5000')
         self.piper_url = os.getenv('PIPER_URL', 'http://piper-tts:5001')
+        self.silero_url = os.getenv('SILERO_URL', 'http://silero-tts:5004')
         self.ollama_url = os.getenv('OLLAMA_URL', 'http://host.docker.internal:11434')
         self.ollama_model = os.getenv('OLLAMA_MODEL', 'llama2')
 
@@ -694,12 +695,24 @@ class MumbleAIBot:
             return None
 
     def _synthesize_speech_internal(self, text):
-        """Internal TTS synthesis method"""
-        response = requests.post(
-            f"{self.piper_url}/synthesize",
-            json={'text': text},
-            timeout=30
-        )
+        """Internal TTS synthesis method - routes to Piper or Silero based on config"""
+        # Get TTS engine from database
+        tts_engine = self.get_config('tts_engine', 'piper')
+
+        if tts_engine == 'silero':
+            # Use Silero TTS
+            response = requests.post(
+                f"{self.silero_url}/synthesize",
+                json={'text': text},
+                timeout=30
+            )
+        else:
+            # Use Piper TTS (default)
+            response = requests.post(
+                f"{self.piper_url}/synthesize",
+                json={'text': text},
+                timeout=30
+            )
 
         if response.status_code == 200:
             return io.BytesIO(response.content)

@@ -57,6 +57,14 @@ def init_config_table():
         INSERT INTO bot_config (key, value) VALUES ('whisper_language', 'auto')
         ON CONFLICT (key) DO NOTHING
     """)
+    cursor.execute("""
+        INSERT INTO bot_config (key, value) VALUES ('tts_engine', 'piper')
+        ON CONFLICT (key) DO NOTHING
+    """)
+    cursor.execute("""
+        INSERT INTO bot_config (key, value) VALUES ('silero_voice', 'en_0')
+        ON CONFLICT (key) DO NOTHING
+    """)
 
     conn.commit()
     cursor.close()
@@ -437,6 +445,106 @@ def set_whisper_language():
     conn.close()
 
     return jsonify({'success': True})
+
+# TTS Engine Configuration
+@app.route('/api/tts/engine', methods=['GET'])
+def get_tts_engine():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'tts_engine'")
+    result = cursor.fetchone()
+    engine = result[0] if result else 'piper'
+    cursor.close()
+    conn.close()
+
+    return jsonify({'engine': engine})
+
+@app.route('/api/tts/engine', methods=['POST'])
+def set_tts_engine():
+    data = request.json
+    engine = data.get('engine', 'piper')
+
+    if engine not in ['piper', 'silero']:
+        return jsonify({'error': 'Invalid TTS engine'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'tts_engine'", (engine,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'success': True})
+
+# Silero Voice Configuration
+@app.route('/api/silero/voices', methods=['GET'])
+def get_silero_voices():
+    """Get available Silero voices from the Silero service"""
+    try:
+        response = requests.get('http://silero-tts:5004/voices', timeout=5)
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({'error': 'Failed to fetch voices'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/silero/current', methods=['GET'])
+def get_current_silero_voice():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'silero_voice'")
+    result = cursor.fetchone()
+    voice = result[0] if result else 'en_0'
+    cursor.close()
+    conn.close()
+
+    return jsonify({'voice': voice})
+
+@app.route('/api/silero/current', methods=['POST'])
+def set_current_silero_voice():
+    data = request.json
+    voice = data.get('voice')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'silero_voice'", (voice,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'success': True})
+
+@app.route('/api/silero/preview', methods=['POST'])
+def preview_silero_voice():
+    """Preview a Silero voice by generating sample audio"""
+    from flask import Response
+    data = request.json
+    voice = data.get('voice')
+
+    if not voice:
+        return jsonify({'error': 'No voice specified'}), 400
+
+    try:
+        # Generate preview audio
+        preview_text = "Hello, this is a preview of this voice. How do I sound?"
+        response = requests.post(
+            'http://silero-tts:5004/synthesize',
+            json={'text': preview_text, 'voice': voice},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            # Return audio as response using Flask Response
+            return Response(response.content, mimetype='audio/wav')
+        else:
+            return jsonify({'error': 'Failed to generate preview'}), 500
+
+    except Exception as e:
+        logging.error(f"Error in Silero preview: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 # Statistics
 @app.route('/api/stats', methods=['GET'])

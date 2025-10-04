@@ -20,6 +20,7 @@ MUMBLE_CHANNEL = os.getenv('MUMBLE_CHANNEL', 'Root')  # Channel to join
 # AI Service Endpoints
 WHISPER_URL = os.getenv('WHISPER_URL', 'http://faster-whisper:5000')
 PIPER_URL = os.getenv('PIPER_URL', 'http://piper-tts:5001')
+SILERO_URL = os.getenv('SILERO_URL', 'http://silero-tts:5004')
 
 # Database Configuration (shared with mumble-bot)
 DB_HOST = os.getenv('DB_HOST', 'postgres')

@@ -480,6 +480,7 @@ class AIPipeline:
         # Service endpoints
         self.whisper_url = config.WHISPER_URL
         self.piper_url = config.PIPER_URL
+        self.silero_url = config.SILERO_URL
 
         # DB config
         self.db_host = config.DB_HOST
@@ -717,14 +718,22 @@ class AIPipeline:
 
     def tts_wav(self, text):
         try:
-            # Get voice configuration from database (same as mumble-bot)
-            voice_config = self.get_config('piper_voice', 'en_US-lessac-medium')
-            logger.info(f"Using voice: {voice_config}")
-            
-            resp = requests.post(f"{self.piper_url}/synthesize", json={'text': text}, timeout=60)
+            # Get TTS engine configuration from database (same as mumble-bot)
+            tts_engine = self.get_config('tts_engine', 'piper')
+
+            if tts_engine == 'silero':
+                # Use Silero TTS
+                logger.info("Using Silero TTS engine")
+                resp = requests.post(f"{self.silero_url}/synthesize", json={'text': text}, timeout=60)
+            else:
+                # Use Piper TTS (default)
+                voice_config = self.get_config('piper_voice', 'en_US-lessac-medium')
+                logger.info(f"Using Piper TTS engine with voice: {voice_config}")
+                resp = requests.post(f"{self.piper_url}/synthesize", json={'text': text}, timeout=60)
+
             if resp.status_code == 200:
                 return io.BytesIO(resp.content)
-            logger.error(f"Piper TTS error: {resp.text}")
+            logger.error(f"TTS error ({tts_engine}): {resp.text}")
             return None
         except Exception as e:
             logger.error(f"TTS request failed: {e}")

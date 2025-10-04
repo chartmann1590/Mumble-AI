@@ -59,6 +59,35 @@ services:
     networks:
       - mumble-ai-network
 
+  silero-tts:
+    build:
+      context: ./silero-tts-service
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5004:5004"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - silero-models:/app/models
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   postgres:
     image: postgres:16-alpine
     container_name: mumble-ai-postgres
@@ -123,6 +152,7 @@ services:
       - MUMBLE_PASSWORD=${BOT_PASSWORD:-}
       - WHISPER_URL=http://faster-whisper:5000
       - PIPER_URL=http://piper-tts:5001
+      - SILERO_URL=http://silero-tts:5004
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama2}
       - DB_HOST=postgres
@@ -179,6 +209,7 @@ services:
       - RTP_PORT_MAX=10010
       - WHISPER_URL=http://faster-whisper:5000
       - PIPER_URL=http://piper-tts:5001
+      - SILERO_URL=http://silero-tts:5004
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${POSTGRES_DB:-mumble_ai}
@@ -231,3 +262,4 @@ volumes:
   mumble-data:
   postgres-data:
   piper-voices:
+  silero-models:
