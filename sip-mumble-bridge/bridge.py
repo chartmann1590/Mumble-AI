@@ -820,6 +820,10 @@ class CallSession:
         # Identify caller
         self.caller_name = self._extract_caller_name()
         self.user_session = 0
+        # Audio muting during TTS playback to prevent feedback loop
+        # Start muted to prevent processing audio during welcome message
+        self.muted = True
+        self.mute_lock = threading.Lock()
 
     def start(self):
         """Start the call session"""
@@ -827,15 +831,24 @@ class CallSession:
             logger.info(f"Starting call session with {self.sip_call.caller_addr}")
 
             self.active = True
-            
-            # Play welcome message first
-            self._play_welcome_message()
-            
-            # Start RTP receive thread (handles VAD -> STT -> LLM -> TTS)
+
+            # Start RTP receive thread first (starts muted to prevent feedback during welcome)
             self.rtp_thread = threading.Thread(target=self._rtp_receive_loop, daemon=True)
             self.rtp_thread.start()
 
-            logger.info("Call session active with RTP audio")
+            # Small delay to ensure RTP loop is running
+            time.sleep(0.2)
+
+            # Play welcome message (will handle mute/unmute)
+            self._play_welcome_message()
+
+            # Clear any accumulated audio buffer from acoustic echo
+            with self.mute_lock:
+                self.audio_buffer_8k = []
+                self.recording = False
+                self.last_audio_time = None
+
+            logger.info("Call session active, ready for user input")
             return True
 
         except Exception as e:
@@ -867,6 +880,21 @@ class CallSession:
                 # μ-law (8-bit) -> 16-bit PCM @8kHz
                 try:
                     pcm_8k = audioop.ulaw2lin(payload, 1)
+
+                    # Check if we're muted (bot is speaking) - discard incoming audio to prevent feedback
+                    with self.mute_lock:
+                        is_muted = self.muted
+
+                    if is_muted:
+                        # Bot is speaking, discard incoming audio to prevent echo/feedback
+                        # Still track RMS for debugging but don't record
+                        rms = audioop.rms(pcm_8k, 2)
+                        self.rms_samples.append(rms)
+                        if packet_count % 200 == 1:
+                            avg_rms = sum(self.rms_samples[-200:]) / min(len(self.rms_samples), 200)
+                            logger.debug(f"Audio muted (bot speaking) - RMS: {rms}, Avg: {avg_rms:.1f}")
+                        continue  # Skip processing this audio
+
                     # Voice activity detection
                     rms = audioop.rms(pcm_8k, 2)
 
@@ -920,6 +948,43 @@ class CallSession:
 
         logger.info("RTP receive loop stopped")
 
+    def _play_tts(self, wav_bytes, description="audio"):
+        """Play TTS audio while muting incoming audio to prevent feedback"""
+        if not wav_bytes:
+            logger.warning(f"No audio to play for {description}")
+            return
+
+        try:
+            # Mute incoming audio to prevent feedback loop
+            with self.mute_lock:
+                self.muted = True
+            logger.debug(f"Muted incoming audio for {description} playback")
+
+            # Play the audio
+            self.pipeline.play_tts_over_rtp(self.sip_call, wav_bytes)
+
+            # Add delay after playback to allow acoustic echo to settle
+            # Longer delay for welcome message to ensure echo fully dissipates
+            if "welcome" in description.lower():
+                delay = 1.0  # 1 second for welcome message
+            else:
+                delay = 0.5  # 500ms for other audio
+
+            logger.debug(f"Waiting {delay}s for acoustic echo to settle")
+            time.sleep(delay)
+
+        finally:
+            # Clear any audio buffer that accumulated during playback (acoustic echo)
+            with self.mute_lock:
+                if self.audio_buffer_8k:
+                    logger.debug(f"Clearing {len(self.audio_buffer_8k)} buffered audio chunks from feedback")
+                    self.audio_buffer_8k = []
+                    self.recording = False
+                    self.last_audio_time = None
+                # Unmute incoming audio
+                self.muted = False
+            logger.debug(f"Unmuted incoming audio after {description} playback")
+
     def _process_utterance(self, chunks_8k):
         try:
             logger.info(f"Silence detected, processing and transcribing audio ({len(chunks_8k)} chunks)...")
@@ -950,6 +1015,13 @@ class CallSession:
             avg_amp = audioop.rms(combined_16k, 2)
             logger.info(f"Audio levels - Peak: {max_amp}, RMS: {avg_amp}")
 
+            # Check if audio has sufficient energy to be real speech
+            # Whisper often hallucinates "Thank you" or similar on silence/noise
+            if avg_amp < 50:  # Very low RMS indicates silence or noise, not speech
+                logger.warning(f"Audio RMS too low ({avg_amp}), likely silence/noise. Skipping transcription to avoid Whisper hallucination.")
+                self.processing = False
+                return
+
             if max_amp > 0:
                 # Normalize to 90% of maximum to avoid clipping while maximizing signal
                 target_amp = int(32767 * 0.9)
@@ -971,6 +1043,19 @@ class CallSession:
 
             if not transcript:
                 logger.info("Transcript empty; skipping LLM/TTS")
+                self.processing = False
+                return
+
+            # Filter out common Whisper hallucinations (phrases it generates from silence/noise)
+            hallucinations = [
+                "thank you", "thank you.", "thanks", "thanks.",
+                "bye", "bye.", "goodbye", "goodbye.",
+                "thank you for watching", "thank you for watching.",
+                "you", "you."
+            ]
+            if transcript.strip().lower() in hallucinations:
+                logger.warning(f"Detected Whisper hallucination: '{transcript}' - skipping (likely silence/acoustic echo)")
+                self.processing = False
                 return
 
             logger.info(f"Transcribed: {transcript}")
@@ -981,7 +1066,7 @@ class CallSession:
             # Cue: "Let me think about that..." before LLM
             logger.info("Playing thinking cue...")
             thinking_cue = self.pipeline.tts_wav("Let me think about that...")
-            self.pipeline.play_tts_over_rtp(self.sip_call, thinking_cue)
+            self._play_tts(thinking_cue, "thinking cue")
 
             # LLM
             response_text = self.pipeline.ollama_generate(transcript, user_name=self.caller_name)
@@ -993,13 +1078,13 @@ class CallSession:
             # Cue 3: "Here's my response..." before final response
             logger.info("Playing response cue...")
             response_cue = self.pipeline.tts_wav("Here's my response...")
-            self.pipeline.play_tts_over_rtp(self.sip_call, response_cue)
+            self._play_tts(response_cue, "response cue")
 
             # TTS
             wav_bytes = self.pipeline.tts_wav(response_text)
 
             # Play over RTP
-            self.pipeline.play_tts_over_rtp(self.sip_call, wav_bytes)
+            self._play_tts(wav_bytes, "response")
 
         except Exception as e:
             logger.error(f"Error processing utterance: {e}", exc_info=True)
@@ -1038,17 +1123,17 @@ class CallSession:
         """Generate and play a personalized welcome message using persona and Ollama"""
         try:
             logger.info("Generating welcome message...")
-            
+
             # Generate welcome message using persona and Ollama
             welcome_text = self._generate_welcome_message()
-            
+
             if welcome_text:
                 logger.info(f"Playing welcome message: {welcome_text}")
-                
+
                 # Convert to speech and play over RTP
                 wav_bytes = self.pipeline.tts_wav(welcome_text)
                 if wav_bytes:
-                    self.pipeline.play_tts_over_rtp(self.sip_call, wav_bytes)
+                    self._play_tts(wav_bytes, "welcome message")
                     logger.info("Welcome message played successfully")
                 else:
                     logger.error("Failed to generate TTS for welcome message")
@@ -1058,8 +1143,8 @@ class CallSession:
                 default_welcome = "Hello! I'm your AI assistant. How can I help you today?"
                 wav_bytes = self.pipeline.tts_wav(default_welcome)
                 if wav_bytes:
-                    self.pipeline.play_tts_over_rtp(self.sip_call, wav_bytes)
-                    
+                    self._play_tts(wav_bytes, "default welcome message")
+
         except Exception as e:
             logger.error(f"Error playing welcome message: {e}")
             # Don't fail the call if welcome message fails
