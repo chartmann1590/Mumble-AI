@@ -2,6 +2,7 @@ class TTSApp {
     constructor() {
         this.voices = {};
         this.selectedVoice = null;
+        this.selectedEngine = 'piper';
         this.audioContext = null;
         this.init();
     }
@@ -23,6 +24,17 @@ class TTSApp {
 
         // Character count
         textInput.addEventListener('input', this.updateCharCount.bind(this));
+
+        // Engine selection
+        document.querySelectorAll('input[name="engine"]').forEach(radio => {
+            radio.addEventListener('change', async (e) => {
+                this.selectedEngine = e.target.value;
+                this.clearSelection();
+                await this.loadVoices();
+                this.populateRegionFilter();
+                this.showStatus(`Switched to ${e.target.value === 'piper' ? 'Piper' : 'Silero'} TTS engine`, 'success');
+            });
+        });
 
         // Filter controls
         document.getElementById('region-filter').addEventListener('change', this.filterVoices.bind(this));
@@ -49,7 +61,7 @@ class TTSApp {
 
     async loadVoices() {
         try {
-            const response = await fetch('/api/voices');
+            const response = await fetch(`/api/voices?engine=${this.selectedEngine}`);
             if (!response.ok) {
                 throw new Error('Failed to load voices');
             }
@@ -63,6 +75,11 @@ class TTSApp {
 
     populateRegionFilter() {
         const regionFilter = document.getElementById('region-filter');
+        // Clear existing options except the first "All Regions" option
+        while (regionFilter.options.length > 1) {
+            regionFilter.remove(1);
+        }
+        // Add new options
         Object.keys(this.voices).forEach(regionCode => {
             const option = document.createElement('option');
             option.value = regionCode;
@@ -223,10 +240,11 @@ class TTSApp {
         try {
             const payload = {
                 text: text,
-                voice: this.selectedVoice.id
+                voice: this.selectedVoice.id,
+                engine: this.selectedEngine
             };
             console.log('Sending payload:', payload);
-            
+
             const response = await fetch('/api/synthesize', {
                 method: 'POST',
                 headers: {

@@ -113,3 +113,4 @@ The welcome message feature integrates seamlessly with the existing SIP bridge:
 1. Verify RTP audio is working for normal conversation
 2. Check TTS service is generating audio correctly
 3. Review RTP packet transmission logs
+

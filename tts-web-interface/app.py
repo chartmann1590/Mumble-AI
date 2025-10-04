@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Configuration
 PIPER_TTS_URL = os.getenv('PIPER_TTS_URL', 'http://piper-tts:5001')
+SILERO_TTS_URL = os.getenv('SILERO_TTS_URL', 'http://silero-tts:5004')
 PORT = int(os.getenv('PORT', 5003))
 
 # Comprehensive voice catalog with metadata
@@ -141,6 +142,39 @@ VOICE_CATALOG = {
     }
 }
 
+# Silero voice catalog - matches actual available voices in Silero service
+SILERO_VOICE_CATALOG = {
+    "en": {
+        "name": "English",
+        "voices": {
+            "female": [
+                {"id": "en_0", "name": "Clear Female - Professional", "quality": "high"},
+                {"id": "en_1", "name": "Warm Female - Friendly", "quality": "high"},
+                {"id": "en_5", "name": "Young Female - Energetic", "quality": "high"},
+                {"id": "en_12", "name": "Mature Female - Authoritative", "quality": "high"},
+                {"id": "en_18", "name": "Soft Female - Gentle", "quality": "high"},
+                {"id": "en_24", "name": "Bright Female - Cheerful", "quality": "high"},
+                {"id": "en_30", "name": "Professional Female", "quality": "high"},
+                {"id": "en_36", "name": "Natural Female", "quality": "high"},
+                {"id": "en_42", "name": "Expressive Female", "quality": "high"},
+                {"id": "en_48", "name": "Calm Female", "quality": "high"},
+            ],
+            "male": [
+                {"id": "en_2", "name": "Deep Male - Authoritative", "quality": "high"},
+                {"id": "en_3", "name": "Clear Male - Professional", "quality": "high"},
+                {"id": "en_6", "name": "Warm Male - Friendly", "quality": "high"},
+                {"id": "en_10", "name": "Young Male - Energetic", "quality": "high"},
+                {"id": "en_15", "name": "Mature Male - Deep", "quality": "high"},
+                {"id": "en_20", "name": "Natural Male", "quality": "high"},
+                {"id": "en_25", "name": "Smooth Male", "quality": "high"},
+                {"id": "en_31", "name": "Professional Male", "quality": "high"},
+                {"id": "en_37", "name": "Rich Male", "quality": "high"},
+                {"id": "en_43", "name": "Strong Male", "quality": "high"},
+            ]
+        }
+    }
+}
+
 @app.route('/')
 def index():
     """Main TTS interface page"""
@@ -149,34 +183,42 @@ def index():
 @app.route('/api/voices', methods=['GET'])
 def get_voices():
     """Get all available voices organized by region and gender"""
-    return jsonify(VOICE_CATALOG)
+    engine = request.args.get('engine', 'piper')
+
+    if engine == 'silero':
+        return jsonify(SILERO_VOICE_CATALOG)
+    else:
+        return jsonify(VOICE_CATALOG)
 
 @app.route('/api/synthesize', methods=['POST'])
 def synthesize():
-    """Generate TTS audio using the piper-tts service"""
+    """Generate TTS audio using either piper-tts or silero-tts service"""
     try:
         data = request.get_json()
         logging.info(f"Received data: {data}")
         logging.info(f"Data type: {type(data)}")
-        
+
         if not data or 'text' not in data or 'voice' not in data:
             return jsonify({'error': 'Text and voice are required'}), 400
 
         text = data['text']
         voice = data['voice']
-        logging.info(f"Text: {text}, type: {type(text)}")
-        logging.info(f"Voice: {voice}, type: {type(voice)}")
-        
+        engine = data.get('engine', 'piper')  # Default to piper
+
+        logging.info(f"Engine: {engine}, Text: {text}, Voice: {voice}")
+
         # Ensure text is a string
         if not isinstance(text, str):
             return jsonify({'error': 'Text must be a string'}), 400
-            
+
         if not text.strip():
             return jsonify({'error': 'Text cannot be empty'}), 400
 
-        # Validate voice exists in catalog
+        # Validate voice exists in appropriate catalog
         voice_found = False
-        for region_data in VOICE_CATALOG.values():
+        catalog = SILERO_VOICE_CATALOG if engine == 'silero' else VOICE_CATALOG
+
+        for region_data in catalog.values():
             for gender_voices in region_data['voices'].values():
                 for voice_info in gender_voices:
                     if voice_info['id'] == voice:
@@ -190,26 +232,37 @@ def synthesize():
         if not voice_found:
             return jsonify({'error': 'Invalid voice selected'}), 400
 
-        logging.info(f"Generating TTS for voice: {voice}, text: {text[:50]}...")
-        logging.info(f"Text type: {type(text)}, Voice type: {type(voice)}")
+        logging.info(f"Generating TTS with {engine} for voice: {voice}, text: {text[:50]}...")
 
-        # Call piper-tts service
-        payload = {"text": text, "voice": voice}
-        logging.info(f"Sending payload to piper: {payload}")
-        
-        piper_response = requests.post(
-            f"{PIPER_TTS_URL}/synthesize",
-            json=payload,
-            timeout=30
-        )
+        # Route to appropriate TTS service
+        if engine == 'silero':
+            # Call Silero TTS service
+            payload = {"text": text, "voice": voice}
+            logging.info(f"Sending payload to Silero: {payload}")
 
-        if piper_response.status_code != 200:
-            logging.error(f"Piper TTS error: {piper_response.text}")
+            tts_response = requests.post(
+                f"{SILERO_TTS_URL}/synthesize",
+                json=payload,
+                timeout=30
+            )
+        else:
+            # Call Piper TTS service
+            payload = {"text": text, "voice": voice}
+            logging.info(f"Sending payload to Piper: {payload}")
+
+            tts_response = requests.post(
+                f"{PIPER_TTS_URL}/synthesize",
+                json=payload,
+                timeout=30
+            )
+
+        if tts_response.status_code != 200:
+            logging.error(f"{engine.upper()} TTS error: {tts_response.text}")
             return jsonify({'error': 'TTS generation failed'}), 500
 
         # Create temporary file for the audio
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-            tmp_file.write(piper_response.content)
+            tmp_file.write(tts_response.content)
             tmp_path = tmp_file.name
 
         # Return the audio file
@@ -217,7 +270,7 @@ def synthesize():
             tmp_path,
             mimetype='audio/wav',
             as_attachment=True,
-            download_name=f'tts_{voice}_{hash(text) % 10000}.wav'
+            download_name=f'tts_{engine}_{voice}_{hash(text) % 10000}.wav'
         )
 
     except requests.exceptions.RequestException as e:

@@ -138,7 +138,9 @@ def synthesize():
         text = data['text']
         voice_id = data.get('voice')  # Optional voice parameter
 
-        logging.info(f"Synthesizing: {text[:50]}...")
+        logging.info(f"Received request - text: {text[:50]}...")
+        logging.info(f"Received voice_id: {voice_id}, type: {type(voice_id)}")
+        logging.info(f"Full request data: {data}")
 
         # Ensure text is a string
         if not isinstance(text, str):
@@ -148,8 +150,10 @@ def synthesize():
         # Get voice - use specified voice or current default
         if voice_id and voice_id in AVAILABLE_VOICES:
             speaker = voice_id
+            logging.info(f"Voice {voice_id} found in AVAILABLE_VOICES")
         else:
             speaker = get_current_voice()
+            logging.info(f"Voice {voice_id} NOT found in AVAILABLE_VOICES or was None, using default: {speaker}")
 
         logging.info(f"Using voice: {speaker} on {device}")
 

@@ -105,6 +105,68 @@ body {
     border-radius: 4px;
 }
 
+/* Engine Selection Section */
+.engine-section {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.engine-selector {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.engine-option {
+    flex: 1;
+    min-width: 250px;
+    position: relative;
+    cursor: pointer;
+}
+
+.engine-option input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.engine-label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 20px;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    transition: all 0.3s ease;
+}
+
+.engine-label i {
+    font-size: 1.5rem;
+    color: #667eea;
+}
+
+.engine-label small {
+    color: #718096;
+    font-size: 0.85rem;
+    display: block;
+}
+
+.engine-option input[type="radio"]:checked ~ .engine-label {
+    border-color: #667eea;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.engine-option:hover .engine-label {
+    border-color: #667eea;
+    transform: translateY(-2px);
+}
+
 /* Voice Section */
 .section-header {
     display: flex;

@@ -246,10 +246,13 @@ services:
     depends_on:
       piper-tts:
         condition: service_started
+      silero-tts:
+        condition: service_started
     ports:
       - "5003:5003"
     environment:
       - PIPER_TTS_URL=http://piper-tts:5001
+      - SILERO_TTS_URL=http://silero-tts:5004
     restart: unless-stopped
     networks:
       - mumble-ai-network
