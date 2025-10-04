@@ -4,7 +4,7 @@ System design and component interaction documentation.
 
 ## Overview
 
-Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 9 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, and SIP phone integration.
+Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 10 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, and SIP phone integration.
 
 ## Component Diagram
 
@@ -36,6 +36,11 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │  │ Whisper  │  │  TTS   │  │(External│  │              │  │   Simple    │  │
 │  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │(Build Only) │  │
 │  └──────────┘  └────────┘  └─────────┘  └──────────────┘  └─────────────┘  │
+│  ┌──────────┐                                             ┌─────────────┐  │
+│  │ Silero   │                                             │ TTS Voice   │  │
+│  │  TTS     │                                             │ Generator   │  │
+│  │(Port5004)│                                             │(Port 5003)  │  │
+│  └──────────┘                                             └─────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -75,7 +80,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 1. User calls SIP bridge from phone
 2. SIP bridge auto-answers call
 3. **Welcome message generated using bot persona and Ollama**
-4. **Welcome message converted to speech via TTS**
+4. **Welcome message converted to speech via TTS (Piper or Silero)**
 5. **Welcome message played to caller over RTP**
 6. SIP bridge connects to Mumble Server as client
 7. Phone audio (RTP) converted to Mumble audio format
@@ -141,7 +146,16 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 - **Voices:** 31 pre-loaded models
 - **API:** POST /synthesize, GET /health
 
-### 5. PostgreSQL
+### 5. Silero TTS
+
+- **Image:** Custom (Python 3.11)
+- **Purpose:** Alternative text-to-speech synthesis
+- **Port:** 5004
+- **Voices:** 20+ high-quality English voices
+- **API:** POST /synthesize, GET /health
+- **Features:** GPU acceleration support, natural intonation
+
+### 6. PostgreSQL
 
 - **Image:** postgres:16-alpine
 - **Purpose:** Persistent data storage
@@ -151,7 +165,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Bot configuration
   - User statistics
 
-### 6. Web Control Panel
+### 7. Web Control Panel
 
 - **Image:** Custom (Python 3.11 + Flask)
 - **Purpose:** Management interface
@@ -162,12 +176,12 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Persona management
   - History viewing
 
-### 7. SIP Bridge
+### 8. SIP Bridge
 
 - **Image:** Custom (Python 3.11)
 - **Purpose:** SIP/RTP to Mumble integration
 - **Ports:** 5060 (UDP/TCP), 10000-10010 (UDP)
-- **Dependencies:** Mumble Server, Whisper, Piper, PostgreSQL, Ollama
+- **Dependencies:** Mumble Server, Whisper, Piper, Silero, PostgreSQL, Ollama
 - **Features:**
   - Auto-answer SIP calls
   - **Personalized welcome messages using bot persona and Ollama**
@@ -175,7 +189,19 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Mumble client connection
   - AI pipeline integration
 
-### 8. Mumble Web
+### 9. TTS Voice Generator
+
+- **Image:** Custom (Python 3.11 + Flask)
+- **Purpose:** Standalone TTS voice generation web interface
+- **Port:** 5003
+- **Features:**
+  - Dual TTS engine support (Piper and Silero)
+  - Modern responsive web interface
+  - Voice preview and filtering
+  - Audio file download
+  - Independent operation
+
+### 10. Mumble Web
 
 - **Image:** `rankenstein/mumble-web:latest`
 - **Purpose:** Web-based Mumble client
@@ -186,7 +212,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Voice activity detection
   - Modern responsive UI
 
-### 9. Mumble Web Simple
+### 11. Mumble Web Simple
 
 - **Image:** Custom (Node.js build)
 - **Purpose:** Simplified web client (build only)
@@ -270,6 +296,8 @@ mumble-ai-network (bridge)
 ├── faster-whisper (5000)
 ├── piper-tts (5001)
 ├── web-control-panel (5002)
+├── tts-voice-generator (5003)
+├── silero-tts (5004)
 ├── sip-mumble-bridge (5060, 10000-10010)
 ├── mumble-web (8081)
 ├── postgres (5432 internal)
@@ -279,7 +307,7 @@ mumble-ai-network (bridge)
 External:
 - Ollama: host.docker.internal:11434
 - SIP Phones: localhost:5060
-- Web Browsers: localhost:8081, localhost:5002
+- Web Browsers: localhost:8081, localhost:5002, localhost:5003
 
 ## Monitoring
 

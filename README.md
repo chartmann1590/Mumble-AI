@@ -9,7 +9,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 
 ### 🎙️ Voice & Text Interaction
 - **Speech-to-Text**: Real-time voice transcription using Faster Whisper
-- **Text-to-Speech**: Natural voice synthesis with Piper TTS (31 voice options)
+- **Text-to-Speech**: Dual TTS engines - Piper TTS (31 voices) and Silero TTS (20+ voices)
 - **Dual Communication**: Responds to voice with voice, text with text
 - **Silence Detection**: Automatically processes speech after 1.5 seconds of silence
 
@@ -24,11 +24,11 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Web Clients**: Two web-based Mumble clients (simple and full-featured)
 - **SIP Bridge**: Connect traditional phones via SIP/RTP to Mumble with personalized welcome messages
 - **Web Control Panel**: Management interface for configuration
-- **TTS Voice Generator**: Beautiful web interface for generating and downloading TTS audio
+- **TTS Voice Generator**: Beautiful web interface supporting both Piper and Silero TTS engines
 
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics and conversation monitoring
-- **Voice Selection**: Choose from 31+ diverse TTS voices (US, UK, Australian accents)
+- **Voice Selection**: Choose from 50+ diverse TTS voices across Piper and Silero engines
 - **Model Management**: Switch between Ollama models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
 - **History Management**: View and clear conversation history
@@ -36,14 +36,14 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 ### 🎵 TTS Voice Generator (Standalone)
 - **Independent Service**: Standalone web interface for voice generation
 - **Beautiful Web Interface**: Modern, responsive design with gradient backgrounds
-- **50+ Voice Options**: Comprehensive voice catalog from 9 languages and regions
+- **Dual TTS Engines**: Support for both Piper TTS (50+ voices) and Silero TTS (20+ voices)
 - **Advanced Filtering**: Filter voices by region, gender, and quality level
 - **Real-Time Preview**: Test voices before generating full audio
 - **Text Input Validation**: Character counting and input validation (up to 5000 chars)
 - **Audio Player**: Built-in player with duration display
 - **Download Support**: Generate and download high-quality WAV files
 - **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
-- **On-Demand TTS**: Only uses Piper TTS service when generating audio files
+- **On-Demand TTS**: Only uses TTS services when generating audio files
 
 ### 🔧 Technical Features
 - **Docker Compose**: Full stack deployment with one command
@@ -79,6 +79,11 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 │  │ Whisper  │  │  TTS   │  │(External│  │              │  │
 │  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │
 │  └──────────┘  └────────┘  └─────────┘  └──────────────┘  │
+│  ┌──────────┐                                             │
+│  │ Silero   │                                             │
+│  │  TTS     │                                             │
+│  │(Port5004)│                                             │
+│  └──────────┘                                             │
 └─────────────────────────────────────────────────────────────┘
                       │
               ┌───────▼────────┐
@@ -94,7 +99,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 │  └─────────────────┬───────────────────────────────────┘   │
 │                    │                                       │
 │  ┌─────────────────▼───────────────────────────────────┐   │
-│  │              Uses Piper TTS                         │   │
+│  │         Uses Piper TTS & Silero TTS                 │   │
 │  │            (On-demand only)                         │   │
 │  └────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
@@ -203,6 +208,7 @@ From here you can:
 | Piper TTS | 5001 | Text-to-speech API |
 | Web Control Panel | 5002 | Management interface |
 | TTS Voice Generator | 5003 | Standalone voice generation web interface |
+| Silero TTS | 5004 | Alternative text-to-speech API |
 | PostgreSQL | 5432 | Database (internal) |
 | AI Bot | - | Mumble client |
 | SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
@@ -230,7 +236,8 @@ From here you can:
 Access at `http://localhost:5003`
 
 **Features**
-- **Voice Selection**: Choose from 50+ voices across 9 languages and regions
+- **Dual TTS Engines**: Choose between Piper TTS (50+ voices) and Silero TTS (20+ voices)
+- **Voice Selection**: Choose from 70+ voices across 9 languages and regions
 - **Advanced Filtering**: Filter by region, gender, and quality level
 - **Text Input**: Enter up to 5000 characters for synthesis
 - **Real-Time Preview**: Test voices with sample text before generating
@@ -239,10 +246,11 @@ Access at `http://localhost:5003`
 - **Mobile Responsive**: Works on all devices
 
 **Usage**
-1. Select a voice from the filtered list
-2. Enter your text (up to 5000 characters)
-3. Click "Preview Voice" to test the voice
-4. Click "Generate & Download" to create the audio file
+1. Select a TTS engine (Piper or Silero)
+2. Select a voice from the filtered list
+3. Enter your text (up to 5000 characters)
+4. Click "Preview Voice" to test the voice
+5. Click "Generate & Download" to create the audio file
 
 ### Web Control Panel Features
 
@@ -283,20 +291,19 @@ Access at `http://localhost:5002`
 5. Click "Save Persona"
 6. Talk to the bot and experience the personality!
 
-### Available Voices (31 Total)
+### Available Voices (70+ Total)
 
-**US English:**
-- Female: lessac, amy, kristin, kathleen, hfc_female
-- Male: joe, bryce, danny, john, kusal, hfc_male
-- Multi-speaker: l2arctic (24 speakers with diverse accents), arctic (18), libritts (904)
+**Piper TTS (50+ voices):**
+- **US English:** lessac, amy, kristin, kathleen, hfc_female, joe, bryce, danny, john, kusal, hfc_male
+- **British English:** alba, jenny_dioco, southern_english_female, northern_english_male, alan
+- **Multi-speaker:** l2arctic (24 speakers), arctic (18), libritts (904), aru (12), vctk (109)
+- **Regional:** cori (Irish), semaine (Scottish), wavenet-a (Australian)
 
-**British English:**
-- Female: alba, jenny_dioco, southern_english_female
-- Male: northern_english_male, alan
-- Regional: cori (Irish), semaine (Scottish), aru (12 speakers), vctk (109 speakers)
-
-**Other:**
-- Australian: wavenet-a
+**Silero TTS (20+ voices):**
+- **English:** 20 high-quality voices including clear female, warm male, professional voices
+- **Quality:** All voices are high-quality with natural intonation
+- **Gender:** Balanced selection of male and female voices
+- **Style:** Professional, friendly, energetic, authoritative, and calm voice options
 
 ## Configuration
 
@@ -391,6 +398,11 @@ Mumble-AI/
 │   ├── app.py
 │   ├── download_model.py
 │   └── Dockerfile
+├── silero-tts-service/         # Alternative TTS service
+│   ├── app.py
+│   ├── download_models.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── web-control-panel/          # Management UI
 │   ├── app.py
 │   ├── download_voices.py
@@ -401,7 +413,17 @@ Mumble-AI/
 ├── sip-mumble-bridge/          # SIP/RTP bridge
 │   ├── bridge.py
 │   ├── config.py
+│   ├── WELCOME_MESSAGE_FEATURE.md
 │   └── Dockerfile
+├── tts-web-interface/          # Standalone TTS voice generator
+│   ├── app.py
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   ├── app/
+│   │   ├── static/
+│   │   │   ├── css/style.css
+│   │   │   └── js/app.js
+│   │   └── templates/index.html
 ├── mumble-web/                 # Full web client
 │   ├── app/                    # Client application
 │   ├── themes/                 # UI themes
@@ -413,7 +435,8 @@ Mumble-AI/
 │   └── package.json
 ├── models/                     # AI model storage
 │   ├── whisper/                # Whisper models
-│   └── piper/                  # Piper TTS models
+│   ├── piper/                  # Piper TTS models
+│   └── silero/                 # Silero TTS models
 └── docs/                       # Documentation
     ├── ARCHITECTURE.md
     ├── API.md

@@ -8,6 +8,7 @@ Complete API documentation for all Mumble AI Bot services.
 - [TTS Voice Generator API](#tts-voice-generator-api) (Port 5003)
 - [Faster Whisper API](#faster-whisper-api) (Port 5000)
 - [Piper TTS API](#piper-tts-api) (Port 5001)
+- [Silero TTS API](#silero-tts-api) (Port 5004)
 - [SIP Bridge](#sip-bridge) (Port 5060)
 - [Mumble Web Client](#mumble-web-client) (Port 8081)
 
@@ -435,9 +436,12 @@ Base URL: `http://localhost:5003`
 
 Retrieve the complete voice catalog with filtering options.
 
-**Endpoint:** `GET /api/voices`
+**Endpoint:** `GET /api/voices?engine=piper`
 
-**Response:**
+**Query Parameters:**
+- `engine` (optional): TTS engine to use (`piper` or `silero`). Defaults to `piper`.
+
+**Response (Piper TTS):**
 ```json
 {
   "en_US": {
@@ -469,10 +473,36 @@ Retrieve the complete voice catalog with filtering options.
 }
 ```
 
+**Response (Silero TTS):**
+```json
+{
+  "en": {
+    "name": "English",
+    "voices": {
+      "male": [
+        {
+          "id": "en_0",
+          "name": "Clear Female - Professional",
+          "quality": "high"
+        }
+      ],
+      "female": [
+        {
+          "id": "en_1",
+          "name": "Warm Female - Friendly",
+          "quality": "high"
+        }
+      ]
+    }
+  }
+}
+```
+
 **Notes:**
 - Voices are organized by language/region code
 - Each region contains male and female voice options
-- Quality levels: low, medium, high
+- Quality levels: low, medium, high (Piper) or high (Silero)
+- Silero TTS provides 20+ high-quality English voices
 
 ### Text Synthesis
 
@@ -486,15 +516,21 @@ Generate text-to-speech audio from text input and voice selection.
 ```json
 {
   "text": "Hello, this is a test of the text-to-speech system.",
-  "voice": "en_US-lessac-medium"
+  "voice": "en_US-lessac-medium",
+  "engine": "piper"
 }
 ```
+
+**Parameters:**
+- `text` (required): Text to synthesize (max 5000 characters)
+- `voice` (required): Voice ID from the catalog
+- `engine` (optional): TTS engine to use (`piper` or `silero`). Defaults to `piper`.
 
 **Response:** WAV audio file (binary)
 
 **Headers:**
 - `Content-Type: audio/wav`
-- `Content-Disposition: attachment; filename="speech_[voice]_[hash].wav"`
+- `Content-Disposition: attachment; filename="tts_[engine]_[voice]_[hash].wav"`
 
 **Error Responses:**
 - `400 Bad Request`: Missing or invalid text/voice
@@ -502,9 +538,10 @@ Generate text-to-speech audio from text input and voice selection.
 
 **Notes:**
 - Text must be a string and not empty
-- Voice must exist in the catalog
+- Voice must exist in the selected engine's catalog
 - Maximum text length: 5000 characters
 - Generated audio is in WAV format
+- Engine parameter determines which TTS service to use
 
 ### Voice Preview
 
@@ -517,9 +554,14 @@ Generate a short preview of the selected voice with sample text.
 **Request Body:**
 ```json
 {
-  "voice": "en_US-lessac-medium"
+  "voice": "en_US-lessac-medium",
+  "engine": "piper"
 }
 ```
+
+**Parameters:**
+- `voice` (required): Voice ID from the catalog
+- `engine` (optional): TTS engine to use (`piper` or `silero`). Defaults to `piper`.
 
 **Response:** WAV audio file (binary)
 
@@ -535,6 +577,7 @@ Generate a short preview of the selected voice with sample text.
 - Uses predefined sample text: "Hello! This is a preview of this voice. How does it sound?"
 - Useful for testing voices before generating full audio
 - Same audio quality as full synthesis
+- Engine parameter determines which TTS service to use
 
 ### Error Handling
 
@@ -640,6 +683,80 @@ Text-to-speech synthesis service using Piper TTS.
 
 **Notes:**
 - Uses the voice model configured in the database
+- Returns high-quality WAV audio
+- Audio is automatically cleaned up after sending
+
+## Silero TTS API
+
+Base URL: `http://localhost:5004`
+
+Alternative text-to-speech synthesis service using Silero TTS.
+
+### Health Check
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy"
+}
+```
+
+### Synthesize Speech
+
+**Endpoint:** `POST /synthesize`
+
+**Request Body:**
+```json
+{
+  "text": "Text to synthesize into speech",
+  "voice": "en_0"
+}
+```
+
+**Parameters:**
+- `text` (required): Text to synthesize
+- `voice` (optional): Voice ID (defaults to current voice)
+
+**Response:** Audio file (WAV format)
+
+**Headers:**
+- `Content-Type: audio/wav`
+- `Content-Disposition: attachment; filename=speech.wav`
+
+**Error Response:**
+```json
+{
+  "error": "No text provided"
+}
+```
+
+**Available Voices:**
+- `en_0` - Clear Female - Professional
+- `en_1` - Warm Female - Friendly
+- `en_2` - Deep Male - Authoritative
+- `en_3` - Clear Male - Professional
+- `en_5` - Young Female - Energetic
+- `en_6` - Warm Male - Friendly
+- `en_10` - Young Male - Energetic
+- `en_12` - Mature Female - Authoritative
+- `en_15` - Mature Male - Deep
+- `en_18` - Soft Female - Gentle
+- `en_20` - Natural Male
+- `en_24` - Bright Female - Cheerful
+- `en_25` - Smooth Male
+- `en_30` - Professional Female
+- `en_31` - Professional Male
+- `en_36` - Natural Female
+- `en_37` - Rich Male
+- `en_42` - Expressive Female
+- `en_43` - Strong Male
+- `en_48` - Calm Female
+
+**Notes:**
+- All voices are high-quality with natural intonation
+- Supports GPU acceleration when available
 - Returns high-quality WAV audio
 - Audio is automatically cleaned up after sending
 

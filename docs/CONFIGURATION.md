@@ -34,6 +34,19 @@ WHISPER_MODEL=base
 DEVICE=cpu
 ```
 
+### TTS Configuration
+
+```bash
+# TTS Engine selection (piper or silero)
+TTS_ENGINE=piper
+
+# Piper TTS voice (if using Piper)
+PIPER_VOICE=en_US-lessac-medium
+
+# Silero TTS voice (if using Silero)
+SILERO_VOICE=en_0
+```
+
 ### Ollama Configuration
 
 ```bash
