@@ -257,6 +257,28 @@ services:
     networks:
       - mumble-ai-network
 
+  email-summary-service:
+    build:
+      context: ./email-summary-service
+      dockerfile: Dockerfile
+    container_name: email-summary-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - CHECK_INTERVAL_SECONDS=60
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+
 networks:
   mumble-ai-network:
     driver: bridge

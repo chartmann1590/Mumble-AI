@@ -30,6 +30,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics and conversation monitoring
 - **Memory Management**: View, filter, and manage persistent memories by user and category
+- **Email Summaries**: Configure daily email summaries of conversation history with AI-powered content
 - **Voice Selection**: Choose from 50+ diverse TTS voices across Piper and Silero engines
 - **Model Management**: Switch between Ollama models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
@@ -318,6 +319,24 @@ The bot automatically extracts and remembers important information from conversa
 - Memories are shared across Mumble and SIP bridge
 
 For detailed information, see [PERSISTENT_MEMORIES_GUIDE.md](./PERSISTENT_MEMORIES_GUIDE.md)
+
+### Email Summaries
+
+Stay informed with daily AI-generated email summaries of all conversations:
+
+1. Go to `http://localhost:5002` and scroll to "📧 Email Summary Settings"
+2. Configure your SMTP settings (host, port, credentials)
+3. Set recipient email and preferred delivery time
+4. Click "Send Test Email" to verify configuration
+5. Enable "Daily Summaries" to activate automatic sending
+
+The bot will send beautifully formatted HTML emails with:
+- AI-generated conversation summaries using Ollama
+- Key highlights and important information
+- Activity statistics and metrics
+- Scheduled delivery at your chosen time (default: 10pm EST)
+
+For detailed information, see [EMAIL_SUMMARIES_GUIDE.md](./EMAIL_SUMMARIES_GUIDE.md)
 
 ### Setting a Persona
 

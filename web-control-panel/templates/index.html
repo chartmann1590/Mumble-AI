@@ -397,6 +397,89 @@
                 <p>Loading memories...</p>
             </div>
         </div>
+
+        <!-- Email Summary Settings -->
+        <div class="panel full-width">
+            <h2>📧 Email Summary Settings</h2>
+            <p style="margin-bottom: 15px; color: #666;">Configure daily email summaries of conversation history</p>
+
+            <div class="grid" style="grid-template-columns: 1fr 1fr;">
+                <!-- SMTP Configuration -->
+                <div>
+                    <h3 style="color: #667eea; margin-bottom: 15px;">SMTP Configuration</h3>
+                    <div class="form-group">
+                        <label>SMTP Host</label>
+                        <input type="text" id="email-smtp-host" placeholder="mail.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>SMTP Port</label>
+                        <input type="number" id="email-smtp-port" placeholder="25">
+                    </div>
+                    <div class="form-group">
+                        <label>SMTP Username (optional)</label>
+                        <input type="text" id="email-smtp-username" placeholder="username">
+                    </div>
+                    <div class="form-group">
+                        <label>SMTP Password (optional)</label>
+                        <input type="password" id="email-smtp-password" placeholder="password">
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="email-smtp-tls" style="width: auto;">
+                            Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="email-smtp-ssl" style="width: auto;">
+                            Use SSL
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Email Settings -->
+                <div>
+                    <h3 style="color: #667eea; margin-bottom: 15px;">Email Settings</h3>
+                    <div class="form-group">
+                        <label>From Email</label>
+                        <input type="email" id="email-from" placeholder="mumble-ai@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Recipient Email</label>
+                        <input type="email" id="email-recipient" placeholder="your-email@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Summary Time (24-hour format)</label>
+                        <input type="time" id="email-summary-time" value="22:00">
+                    </div>
+                    <div class="form-group">
+                        <label>Timezone</label>
+                        <select id="email-timezone">
+                            <option value="America/New_York">America/New York (EST/EDT)</option>
+                            <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                            <option value="America/Denver">America/Denver (MST/MDT)</option>
+                            <option value="America/Los_Angeles">America/Los Angeles (PST/PDT)</option>
+                            <option value="UTC">UTC</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="email-enabled" style="width: auto;">
+                            Enable Daily Summaries
+                        </label>
+                    </div>
+                    <div class="form-group" id="email-last-sent-display" style="padding: 10px; background: #f5f5f5; border-radius: 5px; display: none;">
+                        <strong>Last Sent:</strong> <span id="email-last-sent">Never</span>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="saveEmailSettings()">Save Email Settings</button>
+                <button onclick="sendTestEmail()">Send Test Email</button>
+                <button onclick="loadEmailSettings()" class="secondary">Refresh</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -410,6 +493,7 @@
             loadPersona();
             loadConversations();
             loadMemories();
+            loadEmailSettings();
 
             // Refresh stats every 10 seconds
             setInterval(loadStats, 10000);
@@ -1082,6 +1166,98 @@
             } catch (error) {
                 console.error('Error deleting memory:', error);
                 alert('Error deleting memory');
+            }
+        }
+
+        // Email Settings Functions
+        async function loadEmailSettings() {
+            try {
+                const response = await fetch('/api/email/settings');
+                const data = await response.json();
+
+                document.getElementById('email-smtp-host').value = data.smtp_host || '';
+                document.getElementById('email-smtp-port').value = data.smtp_port || 25;
+                document.getElementById('email-smtp-username').value = data.smtp_username || '';
+                document.getElementById('email-smtp-password').value = ''; // Don't populate password
+                document.getElementById('email-smtp-tls').checked = data.smtp_use_tls || false;
+                document.getElementById('email-smtp-ssl').checked = data.smtp_use_ssl || false;
+                document.getElementById('email-from').value = data.from_email || '';
+                document.getElementById('email-recipient').value = data.recipient_email || '';
+                document.getElementById('email-summary-time').value = data.summary_time ? data.summary_time.substring(0, 5) : '22:00';
+                document.getElementById('email-timezone').value = data.timezone || 'America/New_York';
+                document.getElementById('email-enabled').checked = data.daily_summary_enabled || false;
+
+                if (data.last_sent) {
+                    document.getElementById('email-last-sent-display').style.display = 'block';
+                    document.getElementById('email-last-sent').textContent = new Date(data.last_sent).toLocaleString();
+                } else {
+                    document.getElementById('email-last-sent-display').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading email settings:', error);
+                alert('Error loading email settings');
+            }
+        }
+
+        async function saveEmailSettings() {
+            try {
+                const settings = {
+                    smtp_host: document.getElementById('email-smtp-host').value,
+                    smtp_port: parseInt(document.getElementById('email-smtp-port').value),
+                    smtp_username: document.getElementById('email-smtp-username').value,
+                    smtp_use_tls: document.getElementById('email-smtp-tls').checked,
+                    smtp_use_ssl: document.getElementById('email-smtp-ssl').checked,
+                    from_email: document.getElementById('email-from').value,
+                    recipient_email: document.getElementById('email-recipient').value,
+                    summary_time: document.getElementById('email-summary-time').value + ':00',
+                    timezone: document.getElementById('email-timezone').value,
+                    daily_summary_enabled: document.getElementById('email-enabled').checked
+                };
+
+                // Only include password if it was entered
+                const password = document.getElementById('email-smtp-password').value;
+                if (password) {
+                    settings.smtp_password = password;
+                }
+
+                const response = await fetch('/api/email/settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    alert('Email settings saved successfully!');
+                    loadEmailSettings(); // Reload to show updated values
+                } else {
+                    alert('Error saving email settings');
+                }
+            } catch (error) {
+                console.error('Error saving email settings:', error);
+                alert('Error saving email settings');
+            }
+        }
+
+        async function sendTestEmail() {
+            try {
+                // Save settings first
+                await saveEmailSettings();
+
+                // Send test email
+                const response = await fetch('/api/email/test', {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert('Test email sent successfully! Check your inbox.');
+                } else {
+                    alert('Error sending test email: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error sending test email:', error);
+                alert('Error sending test email: ' + error.message);
             }
         }
     </script>

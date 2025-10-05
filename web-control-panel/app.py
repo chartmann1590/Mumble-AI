@@ -724,6 +724,217 @@ def get_users():
 
     return jsonify(users)
 
+# Email Settings API
+@app.route('/api/email/settings', methods=['GET'])
+def get_email_settings():
+    """Get email configuration settings"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT smtp_host, smtp_port, smtp_username, smtp_use_tls, smtp_use_ssl,
+               from_email, recipient_email, daily_summary_enabled, summary_time,
+               timezone, last_sent
+        FROM email_settings
+        WHERE id = 1
+    """)
+
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not row:
+        return jsonify({'error': 'Email settings not found'}), 404
+
+    return jsonify({
+        'smtp_host': row[0],
+        'smtp_port': row[1],
+        'smtp_username': row[2],
+        'smtp_use_tls': row[3],
+        'smtp_use_ssl': row[4],
+        'from_email': row[5],
+        'recipient_email': row[6],
+        'daily_summary_enabled': row[7],
+        'summary_time': str(row[8]) if row[8] else '22:00:00',
+        'timezone': row[9],
+        'last_sent': row[10].isoformat() if row[10] else None
+    })
+
+@app.route('/api/email/settings', methods=['POST'])
+def update_email_settings():
+    """Update email configuration settings"""
+    data = request.json
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Build update query
+    updates = []
+    params = []
+
+    if 'smtp_host' in data:
+        updates.append("smtp_host = %s")
+        params.append(data['smtp_host'])
+
+    if 'smtp_port' in data:
+        updates.append("smtp_port = %s")
+        params.append(data['smtp_port'])
+
+    if 'smtp_username' in data:
+        updates.append("smtp_username = %s")
+        params.append(data['smtp_username'])
+
+    if 'smtp_password' in data:
+        updates.append("smtp_password = %s")
+        params.append(data['smtp_password'])
+
+    if 'smtp_use_tls' in data:
+        updates.append("smtp_use_tls = %s")
+        params.append(data['smtp_use_tls'])
+
+    if 'smtp_use_ssl' in data:
+        updates.append("smtp_use_ssl = %s")
+        params.append(data['smtp_use_ssl'])
+
+    if 'from_email' in data:
+        updates.append("from_email = %s")
+        params.append(data['from_email'])
+
+    if 'recipient_email' in data:
+        updates.append("recipient_email = %s")
+        params.append(data['recipient_email'])
+
+    if 'daily_summary_enabled' in data:
+        updates.append("daily_summary_enabled = %s")
+        params.append(data['daily_summary_enabled'])
+
+    if 'summary_time' in data:
+        updates.append("summary_time = %s")
+        params.append(data['summary_time'])
+
+    if 'timezone' in data:
+        updates.append("timezone = %s")
+        params.append(data['timezone'])
+
+    if updates:
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(1)  # id = 1
+
+        query = f"UPDATE email_settings SET {', '.join(updates)} WHERE id = %s"
+        cursor.execute(query, params)
+        conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({'success': True})
+
+@app.route('/api/email/test', methods=['POST'])
+def send_test_email():
+    """Send a test email using current settings"""
+    try:
+        # Import the email service functionality
+        import sys
+        sys.path.insert(0, '/email-summary-service')
+
+        # Get email settings
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT smtp_host, smtp_port, smtp_username, smtp_password,
+                   smtp_use_tls, smtp_use_ssl, from_email, recipient_email, timezone
+            FROM email_settings
+            WHERE id = 1
+        """)
+
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row:
+            return jsonify({'error': 'Email settings not configured'}), 400
+
+        settings = {
+            'smtp_host': row[0],
+            'smtp_port': row[1],
+            'smtp_username': row[2],
+            'smtp_password': row[3],
+            'smtp_use_tls': row[4],
+            'smtp_use_ssl': row[5],
+            'from_email': row[6],
+            'recipient_email': row[7],
+            'timezone': row[8]
+        }
+
+        if not settings['recipient_email']:
+            return jsonify({'error': 'No recipient email configured'}), 400
+
+        # Send test email inline
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        from email.utils import formatdate
+        from datetime import datetime
+        import pytz
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = '[TEST] Mumble AI Email System'
+        msg['From'] = settings['from_email']
+        msg['To'] = settings['recipient_email']
+        msg['Date'] = formatdate(localtime=True)
+
+        plain_text = "This is a test email from Mumble AI. If you received this, your email settings are configured correctly!"
+        html_text = """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; }
+        .content { padding: 20px; background: #f4f4f4; border-radius: 8px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin: 0;">🤖 Mumble AI Test Email</h1>
+        </div>
+        <div class="content">
+            <p><strong>This is a test email from Mumble AI.</strong></p>
+            <p>If you received this, your email settings are configured correctly!</p>
+            <p>Daily summaries will be sent at your configured time.</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+        msg.attach(MIMEText(plain_text, 'plain', 'utf-8'))
+        msg.attach(MIMEText(html_text, 'html', 'utf-8'))
+
+        # Send email
+        if settings['smtp_use_ssl']:
+            smtp = smtplib.SMTP_SSL(settings['smtp_host'], settings['smtp_port'], timeout=30)
+        else:
+            smtp = smtplib.SMTP(settings['smtp_host'], settings['smtp_port'], timeout=30)
+            if settings['smtp_use_tls']:
+                smtp.starttls()
+
+        # Login if credentials provided
+        if settings['smtp_username'] and settings['smtp_password']:
+            smtp.login(settings['smtp_username'], settings['smtp_password'])
+
+        smtp.send_message(msg)
+        smtp.quit()
+
+        return jsonify({'success': True, 'message': 'Test email sent successfully'})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 def init_voices():
     """Ensure voices are downloaded on startup"""
     voices_dir = "/app/piper_voices"

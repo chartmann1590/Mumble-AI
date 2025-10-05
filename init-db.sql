@@ -137,8 +137,36 @@ FROM persistent_memories
 WHERE active = TRUE
 ORDER BY importance DESC, extracted_at DESC;
 
+-- Create email settings table for daily summary emails
+CREATE TABLE IF NOT EXISTS email_settings (
+    id SERIAL PRIMARY KEY,
+    smtp_host VARCHAR(255) NOT NULL DEFAULT 'localhost',
+    smtp_port INTEGER NOT NULL DEFAULT 25,
+    smtp_username VARCHAR(255),
+    smtp_password VARCHAR(255),
+    smtp_use_tls BOOLEAN DEFAULT FALSE,
+    smtp_use_ssl BOOLEAN DEFAULT FALSE,
+    from_email VARCHAR(255) NOT NULL DEFAULT 'mumble-ai@localhost',
+    recipient_email VARCHAR(255),
+    daily_summary_enabled BOOLEAN DEFAULT FALSE,
+    summary_time TIME DEFAULT '22:00:00',  -- 10pm
+    timezone VARCHAR(50) DEFAULT 'America/New_York',  -- EST
+    last_sent TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default email settings
+INSERT INTO email_settings (id, smtp_host, smtp_port, from_email, daily_summary_enabled)
+VALUES (1, 'localhost', 25, 'mumble-ai@localhost', FALSE)
+ON CONFLICT (id) DO NOTHING;
+
+-- Create index for email settings
+CREATE INDEX IF NOT EXISTS idx_email_last_sent ON email_settings(last_sent DESC);
+
 COMMENT ON TABLE conversation_history IS 'Stores all conversation history between users and the AI bot';
 COMMENT ON COLUMN conversation_history.message_type IS 'Type of message: voice or text';
 COMMENT ON COLUMN conversation_history.role IS 'Role: user or assistant';
 COMMENT ON TABLE bot_config IS 'Stores bot configuration settings';
 COMMENT ON TABLE persistent_memories IS 'Stores important extracted memories like schedules, facts, preferences, and tasks';
+COMMENT ON TABLE email_settings IS 'Stores email configuration for daily summary emails';
