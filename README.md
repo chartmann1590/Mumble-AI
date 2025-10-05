@@ -15,8 +15,9 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 
 ### 🤖 AI Integration
 - **Ollama Integration**: Local LLM support (llama3.2, qwen2.5-coder, gemma3, and more)
-- **Conversation Memory**: PostgreSQL-backed conversation history
-- **Context-Aware**: Remembers previous conversations for natural dialogue
+- **Persistent Memories**: AI-powered automatic extraction and storage of schedules, facts, tasks, and preferences
+- **Semantic Memory**: Dual memory architecture with short-term (session) and long-term (semantic search) context
+- **Context-Aware**: Intelligent conversation flow with anti-repetition and anti-hallucination safeguards
 - **Custom Personas**: Define and AI-enhance bot personalities
 
 ### 🌐 Multiple Access Methods
@@ -28,6 +29,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics and conversation monitoring
+- **Memory Management**: View, filter, and manage persistent memories by user and category
 - **Voice Selection**: Choose from 50+ diverse TTS voices across Piper and Silero engines
 - **Model Management**: Switch between Ollama models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
@@ -281,6 +283,41 @@ Access at `http://localhost:5002`
 - User/assistant separation
 - Timestamps and message types
 - One-click history clearing
+
+**Persistent Memories** 🧠
+- AI-powered automatic extraction of important information
+- Filter by user and category (schedule, fact, task, preference, reminder)
+- Importance scoring (1-10) for prioritization
+- Visual color-coded cards by importance level
+- Delete or manually add memories
+- Bot uses memories to provide accurate, contextual responses
+
+### Persistent Memories System
+
+The bot automatically extracts and remembers important information from conversations:
+
+**Categories:**
+- 📅 **Schedule**: Appointments, meetings, events with dates/times
+- 💡 **Fact**: Personal information, preferences, relationships
+- ✓ **Task**: Things to do, reminders, action items
+- ❤️ **Preference**: Likes, dislikes, habits
+- ⏰ **Reminder**: Time-based reminders
+- 📌 **Other**: Miscellaneous important info
+
+**How it works:**
+1. You tell the bot something important: "I have a meeting Monday at 2pm"
+2. Bot automatically extracts and saves: [SCHEDULE] Meeting Monday at 2pm
+3. Later you ask: "What's my schedule Monday?"
+4. Bot retrieves the memory and responds accurately: "You have a meeting at 2pm"
+
+**Managing Memories:**
+- View all memories at `http://localhost:5002` under "🧠 Persistent Memories"
+- Filter by user or category
+- Add memories manually with the "+ Add Memory" button
+- Delete outdated or incorrect memories
+- Memories are shared across Mumble and SIP bridge
+
+For detailed information, see [PERSISTENT_MEMORIES_GUIDE.md](./PERSISTENT_MEMORIES_GUIDE.md)
 
 ### Setting a Persona
 

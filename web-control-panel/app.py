@@ -574,6 +574,156 @@ def get_stats():
         'text_messages': text_messages
     })
 
+# Persistent Memories API
+@app.route('/api/memories', methods=['GET'])
+def get_memories():
+    """Get all persistent memories, optionally filtered by user"""
+    user_name = request.args.get('user')
+    category = request.args.get('category')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT id, user_name, category, content, extracted_at, importance, tags, active
+        FROM persistent_memories
+        WHERE active = TRUE
+    """
+    params = []
+
+    if user_name:
+        query += " AND user_name = %s"
+        params.append(user_name)
+
+    if category:
+        query += " AND category = %s"
+        params.append(category)
+
+    query += " ORDER BY importance DESC, extracted_at DESC"
+
+    cursor.execute(query, params)
+    memories = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify([{
+        'id': m[0],
+        'user_name': m[1],
+        'category': m[2],
+        'content': m[3],
+        'extracted_at': m[4].isoformat() if m[4] else None,
+        'importance': m[5],
+        'tags': m[6] or [],
+        'active': m[7]
+    } for m in memories])
+
+@app.route('/api/memories', methods=['POST'])
+def add_memory():
+    """Manually add a persistent memory"""
+    data = request.json
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO persistent_memories (user_name, category, content, importance, tags)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+    """, (
+        data.get('user_name'),
+        data.get('category', 'other'),
+        data.get('content'),
+        data.get('importance', 5),
+        data.get('tags', [])
+    ))
+
+    memory_id = cursor.fetchone()[0]
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'id': memory_id, 'status': 'created'})
+
+@app.route('/api/memories/<int:memory_id>', methods=['DELETE'])
+def delete_memory(memory_id):
+    """Delete (deactivate) a memory"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE persistent_memories
+        SET active = FALSE
+        WHERE id = %s
+    """, (memory_id,))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'status': 'deleted'})
+
+@app.route('/api/memories/<int:memory_id>', methods=['PUT'])
+def update_memory(memory_id):
+    """Update a memory"""
+    data = request.json
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Build update query dynamically based on provided fields
+    updates = []
+    params = []
+
+    if 'content' in data:
+        updates.append("content = %s")
+        params.append(data['content'])
+
+    if 'category' in data:
+        updates.append("category = %s")
+        params.append(data['category'])
+
+    if 'importance' in data:
+        updates.append("importance = %s")
+        params.append(data['importance'])
+
+    if 'tags' in data:
+        updates.append("tags = %s")
+        params.append(data['tags'])
+
+    if updates:
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(memory_id)
+
+        query = f"UPDATE persistent_memories SET {', '.join(updates)} WHERE id = %s"
+        cursor.execute(query, params)
+        conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({'status': 'updated'})
+
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    """Get list of users who have memories"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT user_name
+        FROM persistent_memories
+        WHERE active = TRUE
+        ORDER BY user_name
+    """)
+
+    users = [row[0] for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    return jsonify(users)
+
 def init_voices():
     """Ensure voices are downloaded on startup"""
     voices_dir = "/app/piper_voices"

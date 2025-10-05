@@ -11,11 +11,14 @@ import psycopg2
 import random
 import functools
 import json
+import uuid
+import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from psycopg2 import pool
 from pymumble_py3 import Mumble
 from pymumble_py3.constants import PYMUMBLE_AUDIO_PER_PACKET
-from typing import Optional, Callable, Any, Tuple
+from typing import Optional, Callable, Any, Tuple, List, Dict
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -214,6 +217,11 @@ class MumbleAIBot:
         self.last_audio_time = {}
 
         self.mumble = None
+
+        # Semantic memory and session tracking
+        self.user_sessions = {}  # Track active sessions per user
+        self.session_lock = threading.Lock()
+        self.embedding_cache = {}  # Cache embeddings to reduce API calls
         
         # Error handling and retry configuration
         self.retry_config = RetryConfig(
@@ -310,17 +318,17 @@ class MumbleAIBot:
             except Exception as e:
                 logger.error(f"Error releasing database connection: {e}")
 
-    def save_message(self, user_name, user_session, message_type, role, message):
+    def save_message(self, user_name, user_session, message_type, role, message, session_id=None):
         """Save a message to the conversation history asynchronously (non-blocking)"""
         # Run DB write in background thread to avoid blocking the main pipeline
         threading.Thread(
             target=self._save_message_sync,
-            args=(user_name, user_session, message_type, role, message),
+            args=(user_name, user_session, message_type, role, message, session_id),
             daemon=True
         ).start()
         return True
 
-    def _save_message_sync(self, user_name, user_session, message_type, role, message):
+    def _save_message_sync(self, user_name, user_session, message_type, role, message, session_id=None):
         """Internal synchronous save method run in background thread"""
         conn = None
         try:
@@ -329,18 +337,21 @@ class MumbleAIBot:
                 logger.warning("Cannot save message: database connection unavailable")
                 return False
 
+            # Generate embedding for the message
+            embedding = self.generate_embedding(message)
+
             cursor = conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO conversation_history
-                (user_name, user_session, message_type, role, message)
-                VALUES (%s, %s, %s, %s, %s)
+                (user_name, user_session, session_id, message_type, role, message, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (user_name, user_session, message_type, role, message)
+                (user_name, user_session, session_id, message_type, role, message, embedding)
             )
             conn.commit()
             cursor.close()
-            logger.debug(f"Saved {role} {message_type} message from {user_name}")
+            logger.debug(f"Saved {role} {message_type} message from {user_name} (session: {session_id})")
             return True
         except Exception as e:
             logger.error(f"Error saving message to database: {e}")
@@ -354,7 +365,7 @@ class MumbleAIBot:
             if conn:
                 self.release_db_connection(conn)
 
-    def get_conversation_history(self, user_name=None, limit=10):
+    def get_conversation_history(self, user_name=None, limit=10, session_id=None):
         """Retrieve recent conversation history with error handling"""
         conn = None
         try:
@@ -365,7 +376,19 @@ class MumbleAIBot:
 
             cursor = conn.cursor()
 
-            if user_name:
+            if session_id:
+                # Get history for specific session
+                cursor.execute(
+                    """
+                    SELECT role, message, message_type, timestamp
+                    FROM conversation_history
+                    WHERE session_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                    """,
+                    (session_id, limit)
+                )
+            elif user_name:
                 cursor.execute(
                     """
                     SELECT role, message, message_type, timestamp
@@ -487,6 +510,25 @@ class MumbleAIBot:
             if not message:
                 return
 
+            # Ignore server notifications and warnings (they contain HTML tags and specific keywords)
+            server_message_indicators = [
+                '<b>[WARNING]</b>',
+                'ChannelListener',
+                'upgrade to Mumble',
+                'upgrading to Mumble',
+                '<b>[NOTICE]</b>',
+                '<b>[INFO]</b>',
+                'server has the',
+                'feature enabled'
+            ]
+
+            # Check if this is a server message
+            is_server_message = any(indicator in message for indicator in server_message_indicators)
+
+            if is_server_message:
+                logger.info(f"Ignoring server notification from {sender_name}: {message[:100]}...")
+                return
+
             logger.info(f"Text message from {sender_name}: {message}")
 
             # Process in a separate thread to not block
@@ -498,14 +540,26 @@ class MumbleAIBot:
     def process_text_message(self, message, sender_name, sender_session=0):
         """Process a text message and send a text-only response"""
         try:
-            # Get Ollama response FIRST (before saving to avoid duplication in history)
+            # Get or create session for this user
+            session_id = self.get_or_create_session(sender_name, sender_session)
+
+            # Save user message SYNCHRONOUSLY first so it's in the context for immediate follow-ups
+            self._save_message_sync(sender_name, sender_session, 'text', 'user', message, session_id)
+
+            # Get Ollama response (now with user message in DB)
             logger.info(f"Getting Ollama response for text from {sender_name}...")
-            response_text = self.get_ollama_response(message, user_name=sender_name)
+            response_text = self.get_ollama_response(message, user_name=sender_name, session_id=session_id)
             logger.info(f"Ollama text response: {response_text}")
 
-            # Now save both messages to database (after getting response)
-            self.save_message(sender_name, sender_session, 'text', 'user', message)
-            self.save_message(sender_name, sender_session, 'text', 'assistant', response_text)
+            # Save assistant response asynchronously (not needed for immediate context)
+            self.save_message(sender_name, sender_session, 'text', 'assistant', response_text, session_id=session_id)
+
+            # Extract and save memories in background (non-blocking)
+            threading.Thread(
+                target=self.extract_and_save_memory,
+                args=(message, response_text, sender_name, session_id),
+                daemon=True
+            ).start()
 
             # Send text-only response (no TTS for text messages)
             self.mumble.my_channel().send_text_message(response_text)
@@ -535,6 +589,9 @@ class MumbleAIBot:
             return
 
         try:
+            # Get or create session for this user
+            session_id = self.get_or_create_session(user_name, user_id)
+
             # Get audio buffer
             audio_data = self.audio_buffer[user_id]
             self.audio_buffer[user_id] = []
@@ -553,16 +610,23 @@ class MumbleAIBot:
 
             logger.info(f"Transcribed: {transcript}")
 
-            # Save user's voice message to database
-            self.save_message(user_name, user_id, 'voice', 'user', transcript)
+            # Save user message SYNCHRONOUSLY first so it's in the context for immediate follow-ups
+            self._save_message_sync(user_name, user_id, 'voice', 'user', transcript, session_id)
 
-            # Get response from Ollama
+            # Get response from Ollama (now with user message in DB)
             logger.info("Getting response from Ollama...")
-            response_text = self.get_ollama_response(transcript, user_name=user_name)
+            response_text = self.get_ollama_response(transcript, user_name=user_name, session_id=session_id)
             logger.info(f"Ollama response: {response_text}")
 
-            # Save assistant's voice response to database
-            self.save_message(user_name, user_id, 'voice', 'assistant', response_text)
+            # Save assistant response asynchronously (not needed for immediate context)
+            self.save_message(user_name, user_id, 'voice', 'assistant', response_text, session_id=session_id)
+
+            # Extract and save memories in background (non-blocking)
+            threading.Thread(
+                target=self.extract_and_save_memory,
+                args=(transcript, response_text, user_name, session_id),
+                daemon=True
+            ).start()
 
             # Synthesize speech
             logger.info("Synthesizing speech...")
@@ -612,29 +676,371 @@ class MumbleAIBot:
         else:
             raise requests.RequestException(f"Transcription failed: {response.text}")
 
-    def get_ollama_response(self, text, user_name=None):
+    def generate_embedding(self, text: str) -> Optional[List[float]]:
+        """Generate embedding vector for text using Ollama's embedding model"""
+        # Check cache first
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        if text_hash in self.embedding_cache:
+            return self.embedding_cache[text_hash]
+
+        try:
+            embedding_model = self.get_config('embedding_model', 'nomic-embed-text:latest')
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+
+            response = requests.post(
+                f"{ollama_url}/api/embeddings",
+                json={
+                    'model': embedding_model,
+                    'prompt': text
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                embedding = response.json().get('embedding', [])
+                # Cache the embedding
+                self.embedding_cache[text_hash] = embedding
+                return embedding
+            else:
+                logger.warning(f"Failed to generate embedding: {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Error generating embedding: {e}")
+            return None
+
+    def get_or_create_session(self, user_name: str, user_session: int) -> str:
+        """Get or create a conversation session ID for a user"""
+        with self.session_lock:
+            # Check if user has an active session
+            if user_name in self.user_sessions:
+                session_id = self.user_sessions[user_name]
+                # Update session activity
+                self._update_session_activity(session_id)
+                return session_id
+
+            # Create new session
+            session_id = f"{user_name}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
+            self.user_sessions[user_name] = session_id
+
+            # Store in database
+            conn = None
+            try:
+                conn = self.get_db_connection()
+                if conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO conversation_sessions (user_name, session_id, started_at, last_activity)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (session_id) DO UPDATE SET last_activity = EXCLUDED.last_activity
+                        """,
+                        (user_name, session_id, datetime.now(), datetime.now())
+                    )
+                    conn.commit()
+                    cursor.close()
+                    logger.info(f"Created new session {session_id} for {user_name}")
+            except Exception as e:
+                logger.error(f"Error creating session: {e}")
+                if conn:
+                    conn.rollback()
+            finally:
+                if conn:
+                    self.release_db_connection(conn)
+
+            return session_id
+
+    def _update_session_activity(self, session_id: str):
+        """Update the last activity timestamp for a session"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE conversation_sessions
+                    SET last_activity = %s, message_count = message_count + 1
+                    WHERE session_id = %s
+                    """,
+                    (datetime.now(), session_id)
+                )
+                conn.commit()
+                cursor.close()
+        except Exception as e:
+            logger.error(f"Error updating session activity: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def close_idle_sessions(self):
+        """Close sessions that have been idle for too long"""
+        timeout_minutes = int(self.get_config('session_timeout_minutes', '30'))
+        timeout_delta = timedelta(minutes=timeout_minutes)
+
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE conversation_sessions
+                    SET state = 'idle'
+                    WHERE state = 'active' AND last_activity < %s
+                    RETURNING session_id, user_name
+                    """,
+                    (datetime.now() - timeout_delta,)
+                )
+                idle_sessions = cursor.fetchall()
+                conn.commit()
+                cursor.close()
+
+                # Remove from active sessions
+                with self.session_lock:
+                    for session_id, user_name in idle_sessions:
+                        if user_name in self.user_sessions and self.user_sessions[user_name] == session_id:
+                            del self.user_sessions[user_name]
+                            logger.info(f"Closed idle session {session_id} for {user_name}")
+        except Exception as e:
+            logger.error(f"Error closing idle sessions: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def extract_and_save_memory(self, user_message: str, assistant_response: str, user_name: str, session_id: str):
+        """Extract important information from conversation and save as persistent memory"""
+        try:
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('ollama_model', self.ollama_model)
+
+            # Prompt to extract important information
+            extraction_prompt = f"""Analyze this conversation exchange and extract ANY important information that should be remembered.
+
+User said: "{user_message}"
+Assistant responded: "{assistant_response}"
+
+Extract information in these categories:
+- schedule: appointments, meetings, events with dates/times
+- fact: personal information, preferences, relationships, important details
+- task: things to do, reminders, action items
+- preference: likes, dislikes, habits
+- other: anything else important
+
+Return ONLY a JSON array of memories (can be empty if nothing important). Each memory should have:
+{{"category": "schedule|fact|task|preference|other", "content": "brief description", "importance": 1-10}}
+
+If there's nothing important to remember, return: []
+
+JSON:"""
+
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': extraction_prompt,
+                    'stream': False,
+                    'options': {'temperature': 0.3}  # Lower temp for more consistent extraction
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json().get('response', '').strip()
+
+                # Try to parse JSON
+                import json
+                import re
+
+                # Extract JSON from response (might have extra text)
+                json_match = re.search(r'\[.*\]', result, re.DOTALL)
+                if json_match:
+                    memories = json.loads(json_match.group())
+
+                    # Save each extracted memory
+                    for memory in memories:
+                        if isinstance(memory, dict) and 'content' in memory and 'category' in memory:
+                            self.save_persistent_memory(
+                                user_name=user_name,
+                                category=memory.get('category', 'other'),
+                                content=memory['content'],
+                                session_id=session_id,
+                                importance=memory.get('importance', 5)
+                            )
+                            logger.info(f"Extracted memory for {user_name}: [{memory.get('category')}] {memory['content']}")
+
+        except Exception as e:
+            logger.error(f"Error extracting memory: {e}")
+
+    def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None, importance: int = 5, tags: List[str] = None):
+        """Save a persistent memory to the database"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO persistent_memories
+                    (user_name, category, content, session_id, importance, tags)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (user_name, category, content, session_id, importance, tags or [])
+                )
+                conn.commit()
+                cursor.close()
+        except Exception as e:
+            logger.error(f"Error saving persistent memory: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def get_persistent_memories(self, user_name: str, category: str = None, limit: int = 20) -> List[Dict]:
+        """Retrieve persistent memories for a user"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return []
+
+            cursor = conn.cursor()
+
+            if category:
+                cursor.execute(
+                    """
+                    SELECT id, category, content, extracted_at, importance, tags
+                    FROM persistent_memories
+                    WHERE user_name = %s AND category = %s AND active = TRUE
+                    ORDER BY importance DESC, extracted_at DESC
+                    LIMIT %s
+                    """,
+                    (user_name, category, limit)
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, category, content, extracted_at, importance, tags
+                    FROM persistent_memories
+                    WHERE user_name = %s AND active = TRUE
+                    ORDER BY importance DESC, extracted_at DESC
+                    LIMIT %s
+                    """,
+                    (user_name, limit)
+                )
+
+            results = cursor.fetchall()
+            cursor.close()
+
+            memories = []
+            for row in results:
+                memories.append({
+                    'id': row[0],
+                    'category': row[1],
+                    'content': row[2],
+                    'extracted_at': row[3],
+                    'importance': row[4],
+                    'tags': row[5] or []
+                })
+
+            return memories
+
+        except Exception as e:
+            logger.error(f"Error retrieving persistent memories: {e}")
+            return []
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def get_semantic_context(self, query_text: str, user_name: str, current_session_id: str, limit: int = 3) -> List[Dict]:
+        """Retrieve semantically similar messages from long-term memory"""
+        # Generate embedding for the query
+        query_embedding = self.generate_embedding(query_text)
+        if not query_embedding:
+            return []
+
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return []
+
+            cursor = conn.cursor()
+
+            # Get similarity threshold from config
+            threshold = float(self.get_config('semantic_similarity_threshold', '0.7'))
+
+            # Find similar messages from past conversations (excluding current session)
+            cursor.execute(
+                """
+                SELECT id, role, message, message_type, timestamp, embedding,
+                       cosine_similarity(%s::FLOAT8[], embedding) as similarity
+                FROM conversation_history
+                WHERE user_name = %s
+                  AND session_id != %s
+                  AND embedding IS NOT NULL
+                  AND cosine_similarity(%s::FLOAT8[], embedding) > %s
+                ORDER BY similarity DESC, timestamp DESC
+                LIMIT %s
+                """,
+                (query_embedding, user_name, current_session_id, query_embedding, threshold, limit)
+            )
+
+            results = cursor.fetchall()
+            cursor.close()
+
+            context = []
+            for row in results:
+                context.append({
+                    'role': row[1],
+                    'message': row[2],
+                    'message_type': row[3],
+                    'timestamp': row[4],
+                    'similarity': row[6]
+                })
+
+            return context
+
+        except Exception as e:
+            logger.error(f"Error retrieving semantic context: {e}")
+            return []
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def get_ollama_response(self, text, user_name=None, session_id=None):
         """Get response from Ollama with conversation history context and circuit breaker protection"""
         try:
-            return self.ollama_circuit_breaker.call(self._get_ollama_response_internal, text, user_name)
+            return self.ollama_circuit_breaker.call(self._get_ollama_response_internal, text, user_name, session_id)
         except CircuitBreakerError:
             logger.error("Ollama circuit breaker is open, cannot get response")
             return "Sorry, I am temporarily unavailable due to service issues."
 
-    def _get_ollama_response_internal(self, text, user_name=None):
+    def _get_ollama_response_internal(self, text, user_name=None, session_id=None):
         """Internal Ollama response method"""
         # Get current Ollama config from database
         ollama_url = self.get_config('ollama_url', self.ollama_url)
         ollama_model = self.get_config('ollama_model', self.ollama_model)
 
         # Build prompt with conversation history
-        prompt = self.build_prompt_with_context(text, user_name)
+        prompt = self.build_prompt_with_context(text, user_name, session_id)
 
         response = requests.post(
             f"{ollama_url}/api/generate",
             json={
                 'model': ollama_model,
                 'prompt': prompt,
-                'stream': False
+                'stream': False,
+                'options': {
+                    'temperature': 0.7,  # Lower temperature for more consistent, focused responses
+                    'top_p': 0.9,  # Nucleus sampling for better quality
+                    'num_predict': 100,  # Limit response length (roughly 1-2 sentences)
+                    'stop': ['\n\n', 'User:', 'Assistant:']  # Stop at conversation breaks
+                }
             },
             timeout=60
         )
@@ -644,39 +1050,87 @@ class MumbleAIBot:
         else:
             raise requests.RequestException(f"Ollama request failed: {response.text}")
 
-    def build_prompt_with_context(self, current_message, user_name=None):
-        """Build a prompt that includes persona and conversation history for context"""
+    def build_prompt_with_context(self, current_message, user_name=None, session_id=None):
+        """Build a prompt with short-term (current session) and long-term (semantic) memory"""
         try:
             # Get bot persona from config
             persona = self.get_config('bot_persona', '')
 
-            # Get recent conversation history
-            history = self.get_conversation_history(user_name=user_name, limit=10)
+            # Get memory limits from config
+            short_term_limit = int(self.get_config('short_term_memory_limit', '3'))
+            long_term_limit = int(self.get_config('long_term_memory_limit', '3'))
 
             # Build the full prompt
             full_prompt = ""
 
-            # Add conciseness instruction and no emoji rule
-            full_prompt = "Keep your responses brief and conversational (1-3 sentences). Never use emojis in your responses. "
+            # Add system instructions with anti-repetition and anti-hallucination guidance
+            full_prompt = """You are having a natural, flowing conversation. CRITICAL RULES - FOLLOW EXACTLY:
 
-            # Add persona if configured
+1. BREVITY: Keep responses to 1-2 short sentences maximum. Be conversational but concise.
+2. TRUTH: NEVER make up information. If you don't know something, say "I don't know" or "I'm not sure."
+3. NO HALLUCINATION: Do NOT invent schedules, events, plans, or details that weren't mentioned by the user.
+4. NO EMOJIS: Never use emojis in your responses.
+5. NO REPETITION: Do NOT repeat or rephrase what you just said in previous messages.
+6. NO SUMMARIES: Do NOT summarize the conversation.
+7. BUILD NATURALLY: Add new information or perspectives, don't restate previous points.
+8. STAY GROUNDED: Only discuss things that were actually mentioned in the conversation.
+9. RESPOND TO CURRENT MESSAGE: Focus ONLY on what the user just said. Do NOT bring up unrelated topics from past conversations.
+
+"""
+
+            # Add persona if configured (but subordinate to truthfulness)
             if persona and persona.strip():
-                full_prompt += f"{persona.strip()}\n\n"
-            else:
-                full_prompt += "\n\n"
+                full_prompt += f"Your personality/character: {persona.strip()}\n\n"
+                full_prompt += "IMPORTANT: Stay in character BUT prioritize truthfulness over role-playing. "
+                full_prompt += "If you don't have information, admit it rather than making something up to fit your character.\n\n"
 
-            # Add conversation history if available
-            if history:
-                full_prompt += "Previous conversation:\n"
-                for role, message, msg_type, timestamp in history:
+            # Get persistent memories (important saved information)
+            persistent_memories = []
+            if user_name:
+                persistent_memories = self.get_persistent_memories(user_name, limit=10)
+                logger.info(f"Retrieved {len(persistent_memories)} persistent memories for {user_name}")
+
+            # Add persistent memories to context
+            if persistent_memories:
+                full_prompt += "IMPORTANT SAVED INFORMATION (use this to answer questions accurately):\n"
+                for mem in persistent_memories:
+                    category_label = mem['category'].upper()
+                    full_prompt += f"[{category_label}] {mem['content']}\n"
+                    logger.debug(f"Adding memory to prompt: [{category_label}] {mem['content']}")
+                full_prompt += "\nUse this information to answer questions. If asked about schedules, tasks, or facts, refer to the saved information above.\n\n"
+
+            # Get short-term memory (current session)
+            short_term_memory = []
+            if session_id:
+                short_term_memory = self.get_conversation_history(session_id=session_id, limit=short_term_limit)
+
+            # Get long-term memory (semantically similar past conversations)
+            long_term_memory = []
+            if user_name and session_id:
+                long_term_memory = self.get_semantic_context(
+                    current_message, user_name, session_id, limit=long_term_limit
+                )
+
+            # Add long-term memory context (if available)
+            if long_term_memory:
+                full_prompt += "BACKGROUND CONTEXT (for understanding only - DO NOT bring up these old topics unless directly asked):\n"
+                for mem in long_term_memory:
+                    role_label = "User" if mem['role'] == 'user' else "You"
+                    full_prompt += f"{role_label}: {mem['message']}\n"
+                full_prompt += "\nREMEMBER: This background context is ONLY for understanding the user better. Focus on their CURRENT message, NOT old topics.\n\n"
+
+            # Add short-term memory (current conversation)
+            if short_term_memory:
+                full_prompt += "Current conversation:\n"
+                for role, message, msg_type, timestamp in short_term_memory:
                     if role == 'user':
                         full_prompt += f"User: {message}\n"
                     else:
-                        full_prompt += f"Assistant: {message}\n"
+                        full_prompt += f"You: {message}\n"
                 full_prompt += "\n"
 
             # Add current message
-            full_prompt += f"User: {current_message}\nAssistant:"
+            full_prompt += f"User: {current_message}\nYou:"
 
             return full_prompt
 
@@ -903,17 +1357,20 @@ class MumbleAIBot:
 
     def _health_monitor(self):
         """Background health monitoring thread"""
+        last_session_cleanup = time.time()
+        session_cleanup_interval = 300  # Clean up idle sessions every 5 minutes
+
         while True:
             try:
                 time.sleep(self.health_check_interval)
-                
+
                 # Check if we need to perform health check
                 current_time = time.time()
                 last_check = min(self.last_health_check.values()) if self.last_health_check else 0
-                
+
                 if current_time - last_check > self.health_check_interval:
                     health_status = self.check_health()
-                    
+
                     # Only attempt auto-recovery if we've been unhealthy for a while
                     # and not currently in the middle of a reconnection
                     if not self.is_healthy and not hasattr(self, '_reconnecting'):
@@ -921,7 +1378,13 @@ class MumbleAIBot:
                         time.sleep(5)
                         if not self.is_healthy:
                             self.auto_recovery()
-                        
+
+                # Periodically clean up idle sessions
+                if current_time - last_session_cleanup > session_cleanup_interval:
+                    logger.info("Running periodic session cleanup...")
+                    self.close_idle_sessions()
+                    last_session_cleanup = current_time
+
             except Exception as e:
                 logger.error(f"Error in health monitor: {e}")
                 time.sleep(10)  # Wait before retrying
