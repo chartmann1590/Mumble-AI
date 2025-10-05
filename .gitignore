@@ -152,3 +152,10 @@ dmypy.json
 
 # Cursor AI
 .cursor/
+
+# Personal documentation files
+AGENTS.md
+CLAUDE.md
+
+# Backup SQL files
+sql/backup-*.sql
