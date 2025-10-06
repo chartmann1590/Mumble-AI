@@ -70,13 +70,17 @@ class SIPCall:
                     if len(parts) >= 3:
                         self.remote_rtp_ip = parts[2]
 
-            # Find media port (m=)
+            # Find media port (m=) and codecs
             for line in lines:
                 if line.startswith('m=audio'):
                     # m=audio 16970 RTP/AVP 0 8 101
                     parts = line.split()
                     if len(parts) >= 2:
                         self.remote_rtp_port = int(parts[1])
+                        # Extract payload types (codecs)
+                        if len(parts) >= 4:
+                            codecs = ' '.join(parts[3:])
+                            logger.info(f"Client offered codecs (payload types): {codecs}")
 
             logger.info(f"Parsed SDP: Remote RTP at {self.remote_rtp_ip}:{self.remote_rtp_port}")
             return self.remote_rtp_ip and self.remote_rtp_port
@@ -580,9 +584,23 @@ class AIPipeline:
                 self.release_db_connection(conn)
 
     def save_message(self, user_name, user_session, message_type, role, message, session_id=None):
+        """Save a message to the conversation history asynchronously (non-blocking)"""
+        # Run DB write in background thread to avoid blocking the main pipeline
+        threading.Thread(
+            target=self._save_message_sync,
+            args=(user_name, user_session, message_type, role, message, session_id),
+            daemon=True
+        ).start()
+        return True
+
+    def _save_message_sync(self, user_name, user_session, message_type, role, message, session_id=None):
+        """Internal synchronous save method run in background thread"""
         conn = None
         try:
             conn = self.get_db_connection()
+            if not conn:
+                logger.warning("Cannot save message: database connection unavailable")
+                return False
 
             # Generate embedding for the message
             embedding = self.generate_embedding(message)
@@ -599,10 +617,12 @@ class AIPipeline:
             conn.commit()
             cursor.close()
             logger.debug(f"Saved {role} {message_type} message from {user_name} (session: {session_id})")
+            return True
         except Exception as e:
             logger.error(f"Error saving message to database: {e}")
             if conn:
                 conn.rollback()
+            return False
         finally:
             if conn:
                 self.release_db_connection(conn)
@@ -1226,9 +1246,18 @@ class CallSession:
         self.active = False
         self.rtp_thread = None
         self.pipeline = pipeline if pipeline else AIPipeline()
-        # Voice activity detection on 8kHz PCM - lowered threshold for better detection
-        self.voice_threshold = 100  # lowered from 500 for better SIP audio detection
-        self.silence_threshold = 2.0  # seconds - increased for better utterance capture
+        # Voice activity detection on 8kHz PCM
+        # Check if manual override is set via config
+        if config.VOICE_THRESHOLD > 0:
+            self.voice_threshold = config.VOICE_THRESHOLD
+            self.adaptive_threshold = False  # Manual override disables adaptive calibration
+            logger.info(f"Using manual voice threshold: {self.voice_threshold}")
+        else:
+            self.voice_threshold = 100  # Initial threshold before calibration
+            self.adaptive_threshold = True  # Enable adaptive calibration
+            logger.info("Using adaptive voice threshold calibration")
+        
+        self.silence_threshold = config.SILENCE_THRESHOLD
         self.recording = False
         self.last_audio_time = None
         self.audio_buffer_8k = []  # list of 16-bit PCM @8kHz
@@ -1236,6 +1265,10 @@ class CallSession:
         # RMS monitoring for debugging
         self.rms_samples = []
         self.max_rms = 0
+        # Adaptive threshold for cellular/low-volume audio
+        self.baseline_rms_samples = []  # Collect baseline noise floor
+        self.baseline_collection_time = 3.0  # seconds to collect baseline
+        self.baseline_collected = False if self.adaptive_threshold else True
         # Identify caller
         self.caller_name = self._extract_caller_name()
         self.user_session = 0
@@ -1261,13 +1294,16 @@ class CallSession:
             # Play welcome message (will handle mute/unmute)
             self._play_welcome_message()
 
-            # Clear any accumulated audio buffer from acoustic echo
+            # Clear any accumulated audio buffer from acoustic echo and reset baseline
             with self.mute_lock:
                 self.audio_buffer_8k = []
                 self.recording = False
                 self.last_audio_time = None
+                # Reset adaptive threshold calibration to start fresh after welcome message
+                self.baseline_rms_samples = []
+                self.baseline_collected = False
 
-            logger.info("Call session active, ready for user input")
+            logger.info("Call session active, ready for user input. Adaptive threshold calibration will begin.")
             return True
 
         except Exception as e:
@@ -1291,10 +1327,13 @@ class CallSession:
                 # Parse RTP header (12 bytes)
                 header = struct.unpack('!BBHII', data[:12])
                 payload = data[12:]
+                
+                # Extract payload type from header
+                payload_type = header[1] & 0x7F  # Lower 7 bits
 
                 packet_count += 1
                 if packet_count % 100 == 1:  # Log every 100th packet
-                    logger.debug(f"Received RTP packet {packet_count}, payload size: {len(payload)} bytes")
+                    logger.debug(f"Received RTP packet {packet_count}, payload type: {payload_type}, payload size: {len(payload)} bytes")
 
                 # μ-law (8-bit) -> 16-bit PCM @8kHz
                 try:
@@ -1322,10 +1361,36 @@ class CallSession:
                     if rms > self.max_rms:
                         self.max_rms = rms
 
-                    # Log RMS levels periodically for debugging
-                    if packet_count % 200 == 1:
+                    # Adaptive threshold: collect baseline noise floor during first few seconds
+                    if self.adaptive_threshold and not self.baseline_collected:
+                        self.baseline_rms_samples.append(rms)
+                        # After collecting baseline, calculate adaptive threshold
+                        if len(self.baseline_rms_samples) >= int(self.baseline_collection_time * 50):  # 50 packets/sec
+                            # Calculate noise floor statistics
+                            sorted_baseline = sorted(self.baseline_rms_samples)
+                            noise_floor = sorted_baseline[len(sorted_baseline) // 2]  # Median
+                            
+                            # Calculate 75th percentile (peak background noise)
+                            percentile_75_idx = int(len(sorted_baseline) * 0.75)
+                            peak_noise = sorted_baseline[percentile_75_idx]
+                            
+                            # For cellular/low-volume audio: set threshold between noise floor and peak
+                            # This is more sensitive than 3x multiplier
+                            # Use: noise_floor + (peak_noise - noise_floor) * 1.5
+                            # With minimum of 40 and maximum of 300
+                            adaptive_value = noise_floor + int((peak_noise - noise_floor) * 1.5)
+                            self.voice_threshold = max(40, min(300, adaptive_value))
+                            self.baseline_collected = True
+                            logger.info(f"Adaptive threshold calibrated: noise_floor={noise_floor}, peak_noise={peak_noise}, new_threshold={self.voice_threshold}")
+
+                    # Log RMS levels more frequently for debugging cellular issues
+                    if packet_count % 50 == 1:  # Log every 50 packets instead of 200
                         avg_rms = sum(self.rms_samples[-200:]) / min(len(self.rms_samples), 200)
-                        logger.debug(f"Audio stats - Current RMS: {rms}, Avg RMS: {avg_rms:.1f}, Max RMS: {self.max_rms}, Threshold: {self.voice_threshold}")
+                        calibration_status = "CALIBRATING" if (self.adaptive_threshold and not self.baseline_collected) else "ACTIVE"
+                        logger.info(f"Audio stats [{calibration_status}] - Current RMS: {rms}, Avg RMS: {avg_rms:.1f}, Max RMS: {self.max_rms}, Threshold: {self.voice_threshold}")
+                        # Log last 10 RMS values for pattern analysis
+                        recent_rms = self.rms_samples[-10:] if len(self.rms_samples) >= 10 else self.rms_samples
+                        logger.info(f"Recent RMS values: {recent_rms}")
 
                     if rms > self.voice_threshold:
                         self.audio_buffer_8k.append(pcm_8k)
@@ -1483,7 +1548,7 @@ class CallSession:
             session_id = self.pipeline.get_or_create_session(self.caller_name, self.user_session)
 
             # Save user message SYNCHRONOUSLY first so it's in the context for immediate follow-ups
-            self.pipeline._save_message_sync(self.caller_name, self.user_session, 'voice', 'user', transcript, session_id)
+            self.pipeline.save_message(self.caller_name, self.user_session, 'voice', 'user', transcript, session_id)
 
             # Cue: "Let me think about that..." before LLM
             logger.info("Playing thinking cue...")

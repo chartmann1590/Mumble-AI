@@ -709,14 +709,36 @@ class MumbleAIBot:
             return None
 
     def get_or_create_session(self, user_name: str, user_session: int) -> str:
-        """Get or create a conversation session ID for a user"""
+        """Get or create a conversation session ID for a user
+        
+        This method ensures the bot remains available by:
+        1. Reusing active sessions if they exist
+        2. Reactivating idle sessions if recent enough
+        3. Creating new sessions when needed
+        """
         with self.session_lock:
-            # Check if user has an active session
+            # Check if user has an active session in memory
             if user_name in self.user_sessions:
                 session_id = self.user_sessions[user_name]
-                # Update session activity
-                self._update_session_activity(session_id)
-                return session_id
+                # Verify session is still valid in database
+                if self._verify_session_active(session_id):
+                    # Update session activity
+                    self._update_session_activity(session_id)
+                    logger.debug(f"Reusing active session {session_id} for {user_name}")
+                    return session_id
+                else:
+                    # Session no longer valid, remove from memory
+                    logger.info(f"Removing invalid session {session_id} from memory for {user_name}")
+                    del self.user_sessions[user_name]
+
+            # Check if there's a recent idle session in the database that can be reactivated
+            recent_session_id = self._get_recent_idle_session(user_name)
+            if recent_session_id:
+                # Reactivate the idle session
+                self._reactivate_session(recent_session_id)
+                self.user_sessions[user_name] = recent_session_id
+                logger.info(f"Reactivated idle session {recent_session_id} for {user_name}")
+                return recent_session_id
 
             # Create new session
             session_id = f"{user_name}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
@@ -730,9 +752,10 @@ class MumbleAIBot:
                     cursor = conn.cursor()
                     cursor.execute(
                         """
-                        INSERT INTO conversation_sessions (user_name, session_id, started_at, last_activity)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (session_id) DO UPDATE SET last_activity = EXCLUDED.last_activity
+                        INSERT INTO conversation_sessions (user_name, session_id, started_at, last_activity, state)
+                        VALUES (%s, %s, %s, %s, 'active')
+                        ON CONFLICT (session_id) DO UPDATE 
+                        SET last_activity = EXCLUDED.last_activity, state = 'active'
                         """,
                         (user_name, session_id, datetime.now(), datetime.now())
                     )
@@ -748,6 +771,95 @@ class MumbleAIBot:
                     self.release_db_connection(conn)
 
             return session_id
+
+    def _verify_session_active(self, session_id: str) -> bool:
+        """Verify that a session is still active in the database"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return False
+            
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT state FROM conversation_sessions
+                WHERE session_id = %s
+                """,
+                (session_id,)
+            )
+            result = cursor.fetchone()
+            cursor.close()
+            
+            # Session is valid if it exists and is in 'active' state
+            return result is not None and result[0] == 'active'
+            
+        except Exception as e:
+            logger.error(f"Error verifying session {session_id}: {e}")
+            return False
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def _get_recent_idle_session(self, user_name: str) -> Optional[str]:
+        """Get the most recent idle session for a user if within reactivation window"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return None
+            
+            # Get reactivation window from config (default 10 minutes)
+            reactivation_window_minutes = int(self.get_config('session_reactivation_minutes', '10'))
+            
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT session_id FROM conversation_sessions
+                WHERE user_name = %s 
+                  AND state = 'idle'
+                  AND last_activity > %s
+                ORDER BY last_activity DESC
+                LIMIT 1
+                """,
+                (user_name, datetime.now() - timedelta(minutes=reactivation_window_minutes))
+            )
+            result = cursor.fetchone()
+            cursor.close()
+            
+            return result[0] if result else None
+            
+        except Exception as e:
+            logger.error(f"Error getting recent idle session for {user_name}: {e}")
+            return None
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def _reactivate_session(self, session_id: str):
+        """Reactivate an idle session"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE conversation_sessions
+                    SET state = 'active', last_activity = %s
+                    WHERE session_id = %s
+                    """,
+                    (datetime.now(), session_id)
+                )
+                conn.commit()
+                cursor.close()
+        except Exception as e:
+            logger.error(f"Error reactivating session {session_id}: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                self.release_db_connection(conn)
 
     def _update_session_activity(self, session_id: str):
         """Update the last activity timestamp for a session"""
@@ -817,23 +929,28 @@ class MumbleAIBot:
             ollama_url = self.get_config('ollama_url', self.ollama_url)
             ollama_model = self.get_config('ollama_model', self.ollama_model)
 
-            # Prompt to extract important information
-            extraction_prompt = f"""Analyze this conversation exchange and extract ANY important information that should be remembered.
+            # Prompt to extract important information with stricter JSON format requirements
+            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
 
-User said: "{user_message}"
-Assistant responded: "{assistant_response}"
+User: "{user_message}"
+Assistant: "{assistant_response}"
 
-Extract information in these categories:
+Categories:
 - schedule: appointments, meetings, events with dates/times
-- fact: personal information, preferences, relationships, important details
+- fact: personal information, preferences, relationships, details
 - task: things to do, reminders, action items
 - preference: likes, dislikes, habits
-- other: anything else important
+- other: other important information
 
-Return ONLY a JSON array of memories (can be empty if nothing important). Each memory should have:
-{{"category": "schedule|fact|task|preference|other", "content": "brief description", "importance": 1-10}}
+CRITICAL: You MUST respond with ONLY valid JSON, nothing else. No explanatory text before or after.
 
-If there's nothing important to remember, return: []
+Format (return empty array if nothing important):
+[
+  {{"category": "schedule", "content": "description", "importance": 5}}
+]
+
+Valid categories: schedule, fact, task, preference, other
+Importance: 1-10 (1=low, 10=critical)
 
 JSON:"""
 
@@ -843,26 +960,24 @@ JSON:"""
                     'model': ollama_model,
                     'prompt': extraction_prompt,
                     'stream': False,
-                    'options': {'temperature': 0.3}  # Lower temp for more consistent extraction
+                    'options': {
+                        'temperature': 0.2,  # Very low temp for consistent JSON
+                        'num_predict': 500   # Limit response length
+                    }
                 },
                 timeout=30
             )
 
             if response.status_code == 200:
                 result = response.json().get('response', '').strip()
+                logger.debug(f"Memory extraction raw response: {result[:200]}...")
 
-                # Try to parse JSON
-                import json
-                import re
-
-                # Extract JSON from response (might have extra text)
-                json_match = re.search(r'\[.*\]', result, re.DOTALL)
-                if json_match:
-                    memories = json.loads(json_match.group())
-
-                    # Save each extracted memory
+                # Try to parse and save memories
+                memories = self._parse_memory_json(result)
+                if memories is not None:
+                    saved_count = 0
                     for memory in memories:
-                        if isinstance(memory, dict) and 'content' in memory and 'category' in memory:
+                        if self._validate_memory(memory):
                             self.save_persistent_memory(
                                 user_name=user_name,
                                 category=memory.get('category', 'other'),
@@ -871,9 +986,110 @@ JSON:"""
                                 importance=memory.get('importance', 5)
                             )
                             logger.info(f"Extracted memory for {user_name}: [{memory.get('category')}] {memory['content']}")
+                            saved_count += 1
+                        else:
+                            logger.warning(f"Skipping invalid memory: {memory}")
+                    
+                    if saved_count == 0 and len(memories) == 0:
+                        logger.debug(f"No important memories found in conversation with {user_name}")
+                else:
+                    logger.warning(f"Failed to extract valid JSON from memory extraction response")
 
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error during memory extraction: {e}")
         except Exception as e:
-            logger.error(f"Error extracting memory: {e}")
+            logger.error(f"Error extracting memory: {e}", exc_info=True)
+
+    def _parse_memory_json(self, text: str) -> Optional[List[Dict]]:
+        """Parse JSON from LLM response with multiple fallback strategies"""
+        import re
+        
+        # Strategy 1: Try direct JSON parsing
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+            logger.warning("Parsed JSON is not a list, trying extraction...")
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Extract JSON array with regex
+        try:
+            # Look for JSON array, being more careful about matching
+            json_match = re.search(r'\[\s*(?:\{.*?\}\s*,?\s*)*\]', text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+                parsed = json.loads(json_str)
+                if isinstance(parsed, list):
+                    return parsed
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+        # Strategy 3: Clean common issues and retry
+        try:
+            # Remove common text before/after JSON
+            cleaned = text
+            
+            # Remove markdown code blocks
+            cleaned = re.sub(r'```json\s*', '', cleaned)
+            cleaned = re.sub(r'```\s*', '', cleaned)
+            
+            # Find content between first [ and last ]
+            start_idx = cleaned.find('[')
+            end_idx = cleaned.rfind(']')
+            
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                json_str = cleaned[start_idx:end_idx + 1]
+                
+                # Try to fix common JSON issues
+                json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)  # Remove trailing commas
+                
+                parsed = json.loads(json_str)
+                if isinstance(parsed, list):
+                    return parsed
+        except (json.JSONDecodeError, AttributeError, ValueError):
+            pass
+
+        # Strategy 4: Return empty list if response suggests nothing to remember
+        if any(phrase in text.lower() for phrase in ['nothing important', 'no important', 'empty array', '[]']):
+            logger.debug("LLM indicated no important memories")
+            return []
+
+        # All strategies failed
+        logger.error(f"Could not parse JSON from memory extraction. Response: {text[:500]}")
+        return None
+
+    def _validate_memory(self, memory: Dict) -> bool:
+        """Validate a memory object has required fields and valid values"""
+        if not isinstance(memory, dict):
+            return False
+        
+        # Must have content and category
+        if 'content' not in memory or 'category' not in memory:
+            return False
+        
+        # Content must be non-empty string
+        if not isinstance(memory['content'], str) or not memory['content'].strip():
+            return False
+        
+        # Category must be valid
+        valid_categories = ['schedule', 'fact', 'task', 'preference', 'other']
+        if memory['category'] not in valid_categories:
+            logger.warning(f"Invalid category '{memory['category']}', defaulting to 'other'")
+            memory['category'] = 'other'
+        
+        # Importance should be 1-10 if present
+        if 'importance' in memory:
+            try:
+                importance = int(memory['importance'])
+                if importance < 1 or importance > 10:
+                    logger.warning(f"Importance {importance} out of range, clamping to 1-10")
+                    memory['importance'] = max(1, min(10, importance))
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid importance value, defaulting to 5")
+                memory['importance'] = 5
+        
+        return True
 
     def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None, importance: int = 5, tags: List[str] = None):
         """Save a persistent memory to the database"""

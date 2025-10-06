@@ -68,7 +68,8 @@ INSERT INTO bot_config (key, value) VALUES
     ('short_term_memory_limit', '3'),
     ('long_term_memory_limit', '3'),
     ('semantic_similarity_threshold', '0.7'),
-    ('session_timeout_minutes', '30')
+    ('session_timeout_minutes', '30'),
+    ('session_reactivation_minutes', '10')
 ON CONFLICT (key) DO NOTHING;
 
 -- Function to calculate cosine similarity between two embedding vectors

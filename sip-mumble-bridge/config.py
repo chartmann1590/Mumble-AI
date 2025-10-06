@@ -38,5 +38,12 @@ SAMPLE_RATE = 48000  # Mumble uses 48kHz
 FRAME_SIZE = 960     # 20ms at 48kHz
 CHANNELS = 1         # Mono
 
+# Voice Activity Detection Configuration
+# Set VOICE_THRESHOLD to override automatic calibration (useful for cellular debugging)
+# Set to 0 or leave unset to use adaptive calibration
+# Typical values: 100 for internal calls, 40-80 for cellular calls
+VOICE_THRESHOLD = int(os.getenv('VOICE_THRESHOLD', '0'))
+SILENCE_THRESHOLD = float(os.getenv('SILENCE_THRESHOLD', '2.0'))  # seconds of silence to end utterance
+
 # Logging
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
