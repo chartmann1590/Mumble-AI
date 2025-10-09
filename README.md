@@ -194,11 +194,15 @@ From here you can:
 #### Option B: Web Client
 1. Open your browser and navigate to:
    ```
-   http://localhost:8081
+   https://localhost:8081
    ```
-2. Enter your username
-3. Connect to the server
-4. The AI bot will be available in the channel
+2. Accept the self-signed certificate warning (click "Advanced" → "Proceed")
+3. Enter your username
+4. Grant microphone permissions when prompted
+5. Connect to the server
+6. The AI bot will be available in the channel
+
+> **Note:** The web client uses HTTPS with a self-signed certificate for microphone access. Your browser will show a security warning - this is normal for local development. For production, replace with a proper SSL certificate.
 
 #### Option C: SIP Phone (Advanced)
 1. Configure your SIP client or phone system
@@ -221,10 +225,13 @@ From here you can:
 | PostgreSQL | 5432 | Database (internal) |
 | AI Bot | - | Mumble client |
 | SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
-| Mumble Web | 8081 | Web-based Mumble client |
+| Mumble Web | 8081 (HTTPS) | Web-based Mumble client with SSL |
+| Mumble Web Nginx | - | SSL/TLS proxy for Mumble Web (internal) |
+| Mumble Web Simple | - | Simplified web client (build only) |
 
 **Port 48000 Explanation:** The standard Mumble port 64738 is reserved by Windows Hyper-V on many systems. Port 48000 is used externally to avoid conflicts, while internal Docker services still communicate on 64738.
-| Mumble Web Simple | - | Simplified web client (build only) |
+
+**Mumble Web SSL:** The web client uses HTTPS on port 8081 with a self-signed certificate. This enables microphone access in modern browsers. For production use, replace with a CA-signed certificate.
 
 ## Usage
 
