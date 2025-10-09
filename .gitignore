@@ -159,3 +159,6 @@ CLAUDE.md
 
 # Backup SQL files
 sql/backup-*.sql
+
+# SSL certificates
+mumble-web-ssl/*.pem
