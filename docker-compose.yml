@@ -230,6 +230,8 @@ services:
     depends_on:
       mumble-server:
         condition: service_started
+    volumes:
+      - ./mumble-web-config/config.local.js:/home/node/dist/config.local.js:ro
     environment:
       - MUMBLE_SERVER=mumble-server:64738
     # Note: No external port - accessed via nginx-ssl-proxy
