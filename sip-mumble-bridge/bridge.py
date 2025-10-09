@@ -24,6 +24,7 @@ import hashlib
 from psycopg2 import pool
 from collections import deque
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Optional
 
 from pymumble_py3 import Mumble
@@ -820,23 +821,48 @@ class AIPipeline:
             ollama_url = self.get_config('ollama_url', config.DEFAULT_OLLAMA_URL)
             ollama_model = self.get_config('ollama_model', config.DEFAULT_OLLAMA_MODEL)
 
-            # Prompt to extract important information
-            extraction_prompt = f"""Analyze this conversation exchange and extract ANY important information that should be remembered.
+            # Get current date for context
+            from zoneinfo import ZoneInfo
+            from datetime import datetime
+            ny_tz = ZoneInfo("America/New_York")
+            current_datetime = datetime.now(ny_tz)
+            current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
 
-User said: "{user_message}"
-Assistant responded: "{assistant_response}"
+            # Prompt to extract important information with stricter JSON format requirements
+            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
 
-Extract information in these categories:
+CURRENT DATE: {current_date_str}
+
+User: "{user_message}"
+Assistant: "{assistant_response}"
+
+Categories:
 - schedule: appointments, meetings, events with dates/times
-- fact: personal information, preferences, relationships, important details
+- fact: personal information, preferences, relationships, details
 - task: things to do, reminders, action items
 - preference: likes, dislikes, habits
-- other: anything else important
+- other: other important information
 
-Return ONLY a JSON array of memories (can be empty if nothing important). Each memory should have:
-{{"category": "schedule|fact|task|preference|other", "content": "brief description", "importance": 1-10}}
+CRITICAL RULES:
+1. ONLY extract information that is actually mentioned and important
+2. Do NOT create entries with empty content
+3. If there's nothing important to remember, return an empty array: []
+4. You MUST respond with ONLY valid JSON, nothing else
 
-If there's nothing important to remember, return: []
+For SCHEDULE category memories:
+- Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
+- Use date_expression field for the raw expression
+- Use HH:MM format (24-hour) for event_time, or null if no specific time
+- Include description in content field
+
+Format (return empty array if nothing important):
+[
+  {{"category": "schedule", "content": "Haircut appointment", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
+  {{"category": "fact", "content": "Likes tea over coffee", "importance": 4}}
+]
+
+Valid categories: schedule, fact, task, preference, other
+Importance: 1-10 (1=low, 10=critical)
 
 JSON:"""
 
@@ -863,22 +889,47 @@ JSON:"""
                 if json_match:
                     memories = json.loads(json_match.group())
 
-                    # Save each extracted memory
-                    for memory in memories:
-                        if isinstance(memory, dict) and 'content' in memory and 'category' in memory:
-                            self.save_persistent_memory(
-                                user_name=user_name,
-                                category=memory.get('category', 'other'),
-                                content=memory['content'],
-                                session_id=session_id,
-                                importance=memory.get('importance', 5)
-                            )
+                    # Filter out memories with empty or whitespace-only content
+                    valid_memories = []
+                    for mem in memories:
+                        if isinstance(mem, dict) and 'content' in mem and 'category' in mem:
+                            content = mem.get('content', '')
+                            # Skip if content is not a string or is empty/whitespace
+                            if isinstance(content, str) and content.strip():
+                                valid_memories.append(mem)
+                            else:
+                                # Debug level for expected LLM artifacts
+                                logger.debug(f"Filtered out empty memory: category={mem.get('category')}, importance={mem.get('importance')}")
+
+                    # Save each valid extracted memory
+                    for memory in valid_memories:
+                        # Parse date expression for schedule memories
+                        event_date = None
+                        event_time = memory.get('event_time')
+
+                        if memory.get('category') == 'schedule':
+                            date_expression = memory.get('date_expression') or memory.get('event_date')
+                            if date_expression:
+                                event_date = self.parse_date_expression(date_expression)
+
+                        self.save_persistent_memory(
+                            user_name=user_name,
+                            category=memory.get('category', 'other'),
+                            content=memory['content'],
+                            session_id=session_id,
+                            importance=memory.get('importance', 5),
+                            event_date=event_date,
+                            event_time=event_time
+                        )
+                        if event_date:
+                            logger.info(f"Extracted memory for {user_name}: [{memory.get('category')}] {memory['content']} on {event_date} at {event_time or 'all day'}")
+                        else:
                             logger.info(f"Extracted memory for {user_name}: [{memory.get('category')}] {memory['content']}")
 
         except Exception as e:
             logger.error(f"Error extracting memory: {e}")
 
-    def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None, importance: int = 5, tags: List[str] = None):
+    def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None, importance: int = 5, tags: List[str] = None, event_date: str = None, event_time: str = None):
         """Save a persistent memory to the database"""
         conn = None
         try:
@@ -888,10 +939,10 @@ JSON:"""
                 cursor.execute(
                     """
                     INSERT INTO persistent_memories
-                    (user_name, category, content, session_id, importance, tags)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (user_name, category, content, session_id, importance, tags, event_date, event_time)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (user_name, category, content, session_id, importance, tags or [])
+                    (user_name, category, content, session_id, importance, tags or [], event_date, event_time)
                 )
                 conn.commit()
                 cursor.close()
@@ -902,6 +953,400 @@ JSON:"""
         finally:
             if conn:
                 self.release_db_connection(conn)
+
+    def get_schedule_events(self, user_name: str = None, start_date: str = None, end_date: str = None, limit: int = 50) -> List[Dict]:
+        """Retrieve schedule events for a user within a date range"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return []
+
+            cursor = conn.cursor()
+
+            # Build query based on filters
+            query = """
+                SELECT id, user_name, title, event_date, event_time, description, importance, created_at
+                FROM schedule_events
+                WHERE active = TRUE
+            """
+            params = []
+
+            if user_name:
+                query += " AND user_name = %s"
+                params.append(user_name)
+
+            if start_date:
+                query += " AND event_date >= %s"
+                params.append(start_date)
+
+            if end_date:
+                query += " AND event_date <= %s"
+                params.append(end_date)
+
+            query += " ORDER BY event_date, event_time LIMIT %s"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            cursor.close()
+
+            events = []
+            for row in results:
+                events.append({
+                    'id': row[0],
+                    'user_name': row[1],
+                    'title': row[2],
+                    'event_date': row[3],
+                    'event_time': row[4],
+                    'description': row[5],
+                    'importance': row[6],
+                    'created_at': row[7]
+                })
+
+            logger.info(f"Retrieved {len(events)} schedule events for {user_name}")
+            return events
+
+        except Exception as e:
+            logger.error(f"Error retrieving schedule events: {e}")
+            return []
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def add_schedule_event(self, user_name: str, title: str, event_date: str, event_time: str = None,
+                          description: str = None, importance: int = 5) -> int:
+        """Add a new schedule event"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return None
+
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (user_name, title, event_date, event_time, description, importance)
+            )
+
+            event_id = cursor.fetchone()[0]
+            conn.commit()
+            cursor.close()
+
+            logger.info(f"Added schedule event ID {event_id} for {user_name}: {title} on {event_date}")
+            return event_id
+
+        except Exception as e:
+            logger.error(f"Error adding schedule event: {e}")
+            if conn:
+                conn.rollback()
+            return None
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def update_schedule_event(self, event_id: int, title: str = None, event_date: str = None,
+                             event_time: str = None, description: str = None, importance: int = None) -> bool:
+        """Update an existing schedule event"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return False
+
+            cursor = conn.cursor()
+
+            # Build update query dynamically
+            updates = []
+            params = []
+
+            if title is not None:
+                updates.append("title = %s")
+                params.append(title)
+            if event_date is not None:
+                updates.append("event_date = %s")
+                params.append(event_date)
+            if event_time is not None:
+                updates.append("event_time = %s")
+                params.append(event_time)
+            if description is not None:
+                updates.append("description = %s")
+                params.append(description)
+            if importance is not None:
+                updates.append("importance = %s")
+                params.append(importance)
+
+            if not updates:
+                return False
+
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(event_id)
+
+            query = f"UPDATE schedule_events SET {', '.join(updates)} WHERE id = %s AND active = TRUE"
+            cursor.execute(query, params)
+
+            affected = cursor.rowcount
+            conn.commit()
+            cursor.close()
+
+            logger.info(f"Updated schedule event ID {event_id}, affected rows: {affected}")
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Error updating schedule event: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def delete_schedule_event(self, event_id: int) -> bool:
+        """Delete (deactivate) a schedule event"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return False
+
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE schedule_events
+                SET active = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (event_id,)
+            )
+
+            affected = cursor.rowcount
+            conn.commit()
+            cursor.close()
+
+            logger.info(f"Deleted schedule event ID {event_id}, affected rows: {affected}")
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Error deleting schedule event: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def parse_date_expression(self, date_expr: str, reference_date: datetime = None) -> Optional[str]:
+        """Parse natural language date expressions into YYYY-MM-DD format"""
+        if not date_expr or date_expr == "null":
+            return None
+
+        from zoneinfo import ZoneInfo
+        import re
+
+        ny_tz = ZoneInfo("America/New_York")
+        if reference_date is None:
+            reference_date = datetime.now(ny_tz)
+
+        date_expr = date_expr.lower().strip()
+
+        # Already in YYYY-MM-DD format
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_expr):
+            return date_expr
+
+        # Handle "tomorrow"
+        if date_expr == "tomorrow":
+            result_date = reference_date + timedelta(days=1)
+            return result_date.strftime('%Y-%m-%d')
+
+        # Handle "today"
+        if date_expr == "today":
+            return reference_date.strftime('%Y-%m-%d')
+
+        # Handle "in X days/weeks/months"
+        in_match = re.match(r'in (\d+) (day|days|week|weeks|month|months)', date_expr)
+        if in_match:
+            count = int(in_match.group(1))
+            unit = in_match.group(2)
+            if 'day' in unit:
+                result_date = reference_date + timedelta(days=count)
+            elif 'week' in unit:
+                result_date = reference_date + timedelta(weeks=count)
+            elif 'month' in unit:
+                result_date = reference_date + timedelta(days=count * 30)  # Approximate
+            return result_date.strftime('%Y-%m-%d')
+
+        # Handle day names: "this Monday", "next Friday", "Monday", etc.
+        day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+        for i, day_name in enumerate(day_names):
+            if day_name in date_expr:
+                current_weekday = reference_date.weekday()  # Monday is 0
+                target_weekday = i
+
+                # Determine if "this" or "next"
+                if 'next' in date_expr:
+                    # "next Friday" means next week's Friday
+                    days_ahead = (target_weekday - current_weekday) % 7
+                    if days_ahead == 0:
+                        days_ahead = 7  # If today is Friday, "next Friday" is 7 days away
+                    else:
+                        days_ahead += 7  # Always go to next week
+                elif 'this' in date_expr:
+                    # "this Friday" means this week's Friday
+                    days_ahead = (target_weekday - current_weekday) % 7
+                    if days_ahead == 0:
+                        days_ahead = 7  # If today is Friday, "this Friday" might mean next occurrence
+                else:
+                    # Just "Friday" - means upcoming Friday (could be this week or next)
+                    days_ahead = (target_weekday - current_weekday) % 7
+                    if days_ahead == 0:
+                        days_ahead = 7  # If today is Friday, assume next Friday
+
+                result_date = reference_date + timedelta(days=days_ahead)
+                return result_date.strftime('%Y-%m-%d')
+
+        # Try parsing common date formats
+        try:
+            from dateutil import parser
+            parsed_date = parser.parse(date_expr, fuzzy=True)
+            return parsed_date.strftime('%Y-%m-%d')
+        except:
+            pass
+
+        logger.warning(f"Could not parse date expression: {date_expr}")
+        return None
+
+    def extract_and_manage_schedule(self, user_message: str, assistant_response: str, user_name: str):
+        """Extract scheduling information from conversation and manage schedule events"""
+        try:
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('ollama_model', self.ollama_model)
+
+            # Get current date for context
+            from zoneinfo import ZoneInfo
+            from datetime import timedelta
+            ny_tz = ZoneInfo("America/New_York")
+            current_datetime = datetime.now(ny_tz)
+            current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
+
+            extraction_prompt = f"""You are a scheduling assistant analyzing a conversation to manage calendar events.
+
+CURRENT DATE: {current_date_str}
+
+Conversation:
+User: {user_message}
+Assistant: {assistant_response}
+
+Analyze this conversation and determine if the user wants to:
+1. ADD a new event to their schedule
+2. UPDATE an existing event
+3. DELETE/CANCEL an event
+4. NOTHING - just asking about schedule or casual conversation
+
+If scheduling action is needed, extract:
+- Action: ADD, UPDATE, DELETE, or NOTHING
+- Event title (brief description)
+- Date expression (use these formats):
+  * Specific date: "2025-10-15" or "October 15" or "Oct 15"
+  * Relative: "tomorrow", "next Monday", "next Friday", "in 3 days"
+- Time (HH:MM format in 24-hour, or null if not specified)
+- Description (optional additional details)
+- Importance (1-10, default 5)
+- Event ID (if updating/deleting - look for "that event", "the appointment", etc.)
+
+IMPORTANT: For relative dates like "next Friday", just return "next Friday" - do NOT calculate the actual date.
+
+Respond ONLY with a JSON object (no markdown, no extra text):
+{{"action": "ADD|UPDATE|DELETE|NOTHING", "title": "...", "date_expression": "next Friday", "time": "HH:MM or null", "description": "...", "importance": 5, "event_id": null}}
+
+Examples:
+User: "I have a dentist appointment tomorrow at 3pm"
+{{"action": "ADD", "title": "Dentist appointment", "date_expression": "tomorrow", "time": "15:00", "description": null, "importance": 7, "event_id": null}}
+
+User: "Schedule me for next Friday at 9:30am for my haircut"
+{{"action": "ADD", "title": "haircut", "date_expression": "next Friday", "time": "09:30", "description": null, "importance": 5, "event_id": null}}
+
+User: "Cancel my meeting on Monday"
+{{"action": "DELETE", "title": "meeting", "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "What's on my schedule?"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+"""
+
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': extraction_prompt,
+                    'stream': False,
+                    'temperature': 0.1
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                import json
+                result_text = response.json().get('response', '').strip()
+
+                # Parse JSON response
+                try:
+                    result = json.loads(result_text)
+                    action = result.get('action', 'NOTHING')
+
+                    if action == 'ADD':
+                        # Parse the date expression into YYYY-MM-DD format
+                        date_expression = result.get('date_expression') or result.get('date')
+                        parsed_date = self.parse_date_expression(date_expression, current_datetime)
+
+                        event_id = self.add_schedule_event(
+                            user_name=user_name,
+                            title=result.get('title', 'Untitled Event'),
+                            event_date=parsed_date,
+                            event_time=result.get('time'),
+                            description=result.get('description'),
+                            importance=result.get('importance', 5)
+                        )
+                        if event_id:
+                            logger.info(f"Added schedule event {event_id} for {user_name}: {result.get('title')} on {parsed_date}")
+
+                    elif action == 'UPDATE' and result.get('event_id'):
+                        # Parse the date expression if present
+                        date_expression = result.get('date_expression') or result.get('date')
+                        parsed_date = self.parse_date_expression(date_expression, current_datetime) if date_expression else None
+
+                        success = self.update_schedule_event(
+                            event_id=result.get('event_id'),
+                            title=result.get('title'),
+                            event_date=parsed_date,
+                            event_time=result.get('time'),
+                            description=result.get('description'),
+                            importance=result.get('importance')
+                        )
+                        if success:
+                            logger.info(f"Updated schedule event {result.get('event_id')} for {user_name}")
+
+                    elif action == 'DELETE':
+                        # Find and delete matching events
+                        title_search = result.get('title', '')
+                        if title_search:
+                            events = self.get_schedule_events(user_name=user_name)
+                            for event in events:
+                                if title_search.lower() in event['title'].lower():
+                                    self.delete_schedule_event(event['id'])
+                                    logger.info(f"Deleted schedule event {event['id']} for {user_name}")
+                                    break
+
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse schedule extraction result: {result_text}")
+
+        except Exception as e:
+            logger.error(f"Error in schedule extraction: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_persistent_memories(self, user_name: str, category: str = None, limit: int = 20) -> List[Dict]:
         """Retrieve persistent memories for a user"""
@@ -916,7 +1361,7 @@ JSON:"""
             if category:
                 cursor.execute(
                     """
-                    SELECT id, category, content, extracted_at, importance, tags
+                    SELECT id, category, content, extracted_at, importance, tags, event_date, event_time
                     FROM persistent_memories
                     WHERE user_name = %s AND category = %s AND active = TRUE
                     ORDER BY importance DESC, extracted_at DESC
@@ -927,7 +1372,7 @@ JSON:"""
             else:
                 cursor.execute(
                     """
-                    SELECT id, category, content, extracted_at, importance, tags
+                    SELECT id, category, content, extracted_at, importance, tags, event_date, event_time
                     FROM persistent_memories
                     WHERE user_name = %s AND active = TRUE
                     ORDER BY importance DESC, extracted_at DESC
@@ -947,7 +1392,9 @@ JSON:"""
                     'content': row[2],
                     'extracted_at': row[3],
                     'importance': row[4],
-                    'tags': row[5] or []
+                    'tags': row[5] or [],
+                    'event_date': row[6],
+                    'event_time': row[7]
                 })
 
             return memories
@@ -1028,8 +1475,23 @@ JSON:"""
             # Build the full prompt
             full_prompt = ""
 
+            # Get current date and time in New York timezone
+            ny_tz = ZoneInfo("America/New_York")
+            current_datetime = datetime.now(ny_tz)
+            current_date_str = current_datetime.strftime("%A, %B %d, %Y")
+            current_time_str = current_datetime.strftime("%I:%M %p %Z")
+
             # Add system instructions with anti-repetition and anti-hallucination guidance
-            full_prompt = """You are having a natural, flowing conversation. CRITICAL RULES - FOLLOW EXACTLY:
+            full_prompt = f"""You are having a natural, flowing conversation. CRITICAL RULES - FOLLOW EXACTLY:
+
+CURRENT DATE AND TIME (New York): {current_date_str} at {current_time_str}
+Use this information when answering questions about scheduling, planning, or time-sensitive topics.
+
+SCHEDULING CAPABILITIES:
+- You can access the user's calendar/schedule automatically
+- When users mention events, appointments, or plans, they are AUTOMATICALLY saved to their schedule
+- You can answer questions about upcoming events using the schedule shown below
+- Users can ask "What's on my schedule?", "Do I have anything tomorrow?", etc.
 
 1. BREVITY: Keep responses to 1-2 short sentences maximum. Be conversational but concise.
 2. TRUTH: NEVER make up information. If you don't know something, say "I don't know" or "I'm not sure."
@@ -1055,12 +1517,45 @@ JSON:"""
                 persistent_memories = self.get_persistent_memories(user_name, limit=10)
                 logger.info(f"Retrieved {len(persistent_memories)} persistent memories for {user_name}")
 
+            # Get schedule events for the user (next 30 days)
+            schedule_events = []
+            if user_name:
+                from datetime import timedelta
+                end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
+                schedule_events = self.get_schedule_events(
+                    user_name=user_name,
+                    start_date=current_datetime.strftime('%Y-%m-%d'),
+                    end_date=end_date,
+                    limit=20
+                )
+                logger.info(f"Retrieved {len(schedule_events)} schedule events for {user_name}")
+
+            # Add schedule events to context
+            if schedule_events:
+                full_prompt += "📅 YOUR UPCOMING SCHEDULE (next 30 days):\n"
+                for event in schedule_events:
+                    event_date_obj = event['event_date']
+                    event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
+                    event_time_str = str(event['event_time']) if event['event_time'] else "All day"
+                    importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
+                    full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
+                    if event['description']:
+                        full_prompt += f"   Details: {event['description']}\n"
+                full_prompt += "\nUse this schedule information to answer questions about your plans, appointments, and events.\n\n"
+
             # Add persistent memories to context
             if persistent_memories:
                 full_prompt += "IMPORTANT SAVED INFORMATION (use this to answer questions accurately):\n"
                 for mem in persistent_memories:
                     category_label = mem['category'].upper()
-                    full_prompt += f"[{category_label}] {mem['content']}\n"
+                    # For schedule memories with date/time, format them specially
+                    if mem['category'] == 'schedule' and mem.get('event_date'):
+                        event_date_obj = mem['event_date']
+                        event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
+                        event_time_str = str(mem.get('event_time', 'all day'))
+                        full_prompt += f"[{category_label}] {mem['content']} (Date: {event_date_str}, Time: {event_time_str})\n"
+                    else:
+                        full_prompt += f"[{category_label}] {mem['content']}\n"
                     logger.debug(f"Adding memory to prompt: [{category_label}] {mem['content']}")
                 full_prompt += "\nUse this information to answer questions. If asked about schedules, tasks, or facts, refer to the saved information above.\n\n"
 
@@ -1566,6 +2061,13 @@ class CallSession:
             threading.Thread(
                 target=self.pipeline.extract_and_save_memory,
                 args=(transcript, response_text, self.caller_name, session_id),
+                daemon=True
+            ).start()
+
+            # Extract and manage schedule in background (non-blocking)
+            threading.Thread(
+                target=self.pipeline.extract_and_manage_schedule,
+                args=(transcript, response_text, self.caller_name),
                 daemon=True
             ).start()
 

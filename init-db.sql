@@ -114,8 +114,21 @@ CREATE TABLE IF NOT EXISTS persistent_memories (
     tags TEXT[],
     active BOOLEAN DEFAULT TRUE,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    event_date DATE,  -- For schedule category memories
+    event_time TIME,  -- For schedule category memories
     FOREIGN KEY (session_id) REFERENCES conversation_sessions(session_id) ON DELETE SET NULL
 );
+
+-- Add event_date and event_time columns if they don't exist (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='persistent_memories' AND column_name='event_date') THEN
+        ALTER TABLE persistent_memories ADD COLUMN event_date DATE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='persistent_memories' AND column_name='event_time') THEN
+        ALTER TABLE persistent_memories ADD COLUMN event_time TIME;
+    END IF;
+END $$;
 
 -- Create indexes for memories
 CREATE INDEX IF NOT EXISTS idx_memories_user ON persistent_memories(user_name);

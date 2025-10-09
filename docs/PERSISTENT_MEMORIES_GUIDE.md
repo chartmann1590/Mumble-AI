@@ -85,15 +85,41 @@ CREATE TABLE persistent_memories (
     importance INTEGER DEFAULT 5 CHECK (importance >= 1 AND importance <= 10),
     tags TEXT[],
     active BOOLEAN DEFAULT TRUE,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    event_date DATE,         -- For schedule category: exact date of event (YYYY-MM-DD)
+    event_time TIME          -- For schedule category: exact time of event (HH:MM)
 );
+```
+
+### Event Date and Time for Schedule Memories
+
+**NEW FEATURE**: Schedule category memories now include exact date and time information!
+
+When the AI extracts a schedule memory, it:
+1. **Calculates the exact date** from relative terms ("tomorrow", "next Monday", etc.)
+2. **Stores date in YYYY-MM-DD format** in `event_date` field
+3. **Stores time in HH:MM format** in `event_time` field (24-hour)
+4. **Includes date/time in content** for human readability
+
+**Examples**:
+- User says: "I have a dentist appointment tomorrow at 3pm"
+- Bot extracts:
+  - `content`: "Dentist appointment on 2025-10-09 at 15:00"
+  - `event_date`: "2025-10-09"
+  - `event_time`: "15:00"
+  - `category`: "schedule"
+  - `importance`: 7-8
+
+When displayed in prompts, schedule memories show the full formatted date:
+```
+[SCHEDULE] Dentist appointment on 2025-10-09 at 15:00 (Date: Wednesday, October 09, 2025, Time: 15:00)
 ```
 
 ### Memory Categories
 
 | Category | Icon | Use Case | Example |
 |----------|------|----------|---------|
-| schedule | 📅 | Events, appointments, meetings | "Dentist appointment Tuesday 3pm" |
+| schedule | 📅 | Events, appointments, meetings | "Dentist appointment on 2025-10-09 at 15:00" |
 | fact | 💡 | Personal info, relationships | "Lives in New York, has 2 cats" |
 | task | ✓ | To-dos, action items | "Buy groceries, finish report" |
 | preference | ❤️ | Likes, dislikes, habits | "Prefers tea over coffee" |

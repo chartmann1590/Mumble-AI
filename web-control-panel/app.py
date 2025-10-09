@@ -36,6 +36,22 @@ def init_config_table():
         )
     """)
 
+    # Initialize schedule_events table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS schedule_events (
+            id SERIAL PRIMARY KEY,
+            user_name VARCHAR(255) NOT NULL,
+            title VARCHAR(500) NOT NULL,
+            event_date DATE NOT NULL,
+            event_time TIME,
+            description TEXT,
+            importance INTEGER DEFAULT 5 CHECK (importance >= 1 AND importance <= 10),
+            active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # Insert default values if not exists
     cursor.execute("""
         INSERT INTO bot_config (key, value) VALUES ('ollama_url', 'http://host.docker.internal:11434')
@@ -76,6 +92,10 @@ init_config_table()
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/schedule')
+def schedule():
+    return render_template('schedule.html')
 
 # Ollama Management
 @app.route('/api/ollama/config', methods=['GET'])
@@ -934,6 +954,204 @@ def send_test_email():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+# Schedule API
+@app.route('/api/schedule', methods=['GET'])
+def get_schedule():
+    """Get all schedule events, optionally filtered by user"""
+    user_name = request.args.get('user')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT id, user_name, title, event_date, event_time, description, importance, created_at
+        FROM schedule_events
+        WHERE active = TRUE
+    """
+    params = []
+
+    if user_name:
+        query += " AND user_name = %s"
+        params.append(user_name)
+
+    query += " ORDER BY event_date, event_time"
+
+    cursor.execute(query, params)
+    events = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify([{
+        'id': e[0],
+        'user_name': e[1],
+        'title': e[2],
+        'event_date': e[3].isoformat() if e[3] else None,
+        'event_time': str(e[4]) if e[4] else None,
+        'description': e[5],
+        'importance': e[6],
+        'created_at': e[7].isoformat() if e[7] else None
+    } for e in events])
+
+@app.route('/api/schedule', methods=['POST'])
+def add_schedule_event():
+    """Add a new schedule event"""
+    data = request.json
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+    """, (
+        data.get('user_name'),
+        data.get('title'),
+        data.get('event_date'),
+        data.get('event_time'),
+        data.get('description'),
+        data.get('importance', 5)
+    ))
+
+    event_id = cursor.fetchone()[0]
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'id': event_id, 'status': 'created'})
+
+@app.route('/api/schedule/<int:event_id>', methods=['PUT'])
+def update_schedule_event(event_id):
+    """Update a schedule event"""
+    data = request.json
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Build update query dynamically based on provided fields
+    updates = []
+    params = []
+
+    if 'user_name' in data:
+        updates.append("user_name = %s")
+        params.append(data['user_name'])
+
+    if 'title' in data:
+        updates.append("title = %s")
+        params.append(data['title'])
+
+    if 'event_date' in data:
+        updates.append("event_date = %s")
+        params.append(data['event_date'])
+
+    if 'event_time' in data:
+        updates.append("event_time = %s")
+        params.append(data['event_time'])
+
+    if 'description' in data:
+        updates.append("description = %s")
+        params.append(data['description'])
+
+    if 'importance' in data:
+        updates.append("importance = %s")
+        params.append(data['importance'])
+
+    if updates:
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(event_id)
+
+        query = f"UPDATE schedule_events SET {', '.join(updates)} WHERE id = %s"
+        cursor.execute(query, params)
+        conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({'status': 'updated'})
+
+@app.route('/api/schedule/<int:event_id>', methods=['DELETE'])
+def delete_schedule_event(event_id):
+    """Delete (deactivate) a schedule event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE schedule_events
+        SET active = FALSE
+        WHERE id = %s
+    """, (event_id,))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'status': 'deleted'})
+
+@app.route('/api/schedule/users', methods=['GET'])
+def get_schedule_users():
+    """Get list of users who have schedule events"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT user_name
+        FROM schedule_events
+        WHERE active = TRUE
+        ORDER BY user_name
+    """)
+
+    users = [row[0] for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    return jsonify(users)
+
+@app.route('/api/schedule/upcoming', methods=['GET'])
+def get_upcoming_events():
+    """Get upcoming schedule events for the next N days"""
+    days_ahead = request.args.get('days', 7, type=int)
+    limit = request.args.get('limit', 10, type=int)
+    user_name = request.args.get('user')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT id, user_name, title, event_date, event_time, description, importance, created_at
+        FROM schedule_events
+        WHERE active = TRUE
+          AND event_date >= CURRENT_DATE
+          AND event_date <= CURRENT_DATE + INTERVAL '%s days'
+    """
+    params = [days_ahead]
+
+    if user_name:
+        query += " AND user_name = %s"
+        params.append(user_name)
+
+    query += " ORDER BY event_date, event_time LIMIT %s"
+    params.append(limit)
+
+    cursor.execute(query, params)
+
+    events = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify([{
+        'id': e[0],
+        'user_name': e[1],
+        'title': e[2],
+        'event_date': e[3].isoformat() if e[3] else None,
+        'event_time': str(e[4]) if e[4] else None,
+        'description': e[5],
+        'importance': e[6],
+        'created_at': e[7].isoformat() if e[7] else None
+    } for e in events])
 
 def init_voices():
     """Ensure voices are downloaded on startup"""

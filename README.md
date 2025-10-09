@@ -2,7 +2,7 @@
 
 A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech recognition, text-to-speech, conversation memory, and a web-based control panel.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -16,6 +16,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 ### 🤖 AI Integration
 - **Ollama Integration**: Local LLM support (llama3.2, qwen2.5-coder, gemma3, and more)
 - **Persistent Memories**: AI-powered automatic extraction and storage of schedules, facts, tasks, and preferences
+- **Smart Scheduling**: AI extracts dates from natural language ("next Friday at 3pm") and creates calendar events
 - **Semantic Memory**: Dual memory architecture with short-term (session) and long-term (semantic search) context
 - **Context-Aware**: Intelligent conversation flow with anti-repetition and anti-hallucination safeguards
 - **Custom Personas**: Define and AI-enhance bot personalities
@@ -28,9 +29,11 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **TTS Voice Generator**: Beautiful web interface supporting both Piper and Silero TTS engines
 
 ### 🎨 Web Control Panel
-- **Real-Time Dashboard**: Live statistics and conversation monitoring
+- **Real-Time Dashboard**: Live statistics, conversation monitoring, and upcoming events display
+- **Schedule Manager**: Full calendar interface for managing events with importance levels and color-coding
+- **Upcoming Events**: Dashboard widget showing next 7 days, list view showing next 30 days
 - **Memory Management**: View, filter, and manage persistent memories by user and category
-- **Email Summaries**: Configure daily email summaries of conversation history with AI-powered content
+- **Email Summaries**: Beautiful HTML emails with AI summaries, schedule events, and extracted memories
 - **Voice Selection**: Choose from 50+ diverse TTS voices across Piper and Silero engines
 - **Model Management**: Switch between Ollama models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
@@ -68,7 +71,8 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 └─────────┼──────────────────┼───────────────────┼────────────┘
           │                  │                   │
 ┌─────────▼──────────────────▼───────────────────▼────────────┐
-│                  Mumble Server (Port 64738)                │
+│                  Mumble Server (Port 48000)                │
+│         (Internal: 64738, External: 48000)                 │
 └─────────┬──────────────────────────────────────────────────┘
           │
     ┌─────▼─────┐
@@ -178,12 +182,14 @@ From here you can:
 #### Option A: Traditional Mumble Client
 1. Open your Mumble client
 2. Add a new server:
-   - **Address:** `localhost`
-   - **Port:** `64738`
+   - **Address:** `localhost` (or your host's IP for remote connections)
+   - **Port:** `48000` (changed from default 64738 due to Windows port reservation conflicts)
    - **Username:** Your name
    - **Password:** Leave empty (unless you set one)
 3. Connect to the server
 4. You should see the AI bot in the channel
+
+> **Note:** The default Mumble port 64738 conflicts with Windows Hyper-V reserved port ranges. The external port has been changed to 48000, but the internal Docker network still uses 64738.
 
 #### Option B: Web Client
 1. Open your browser and navigate to:
@@ -206,7 +212,7 @@ From here you can:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Mumble Server | 64738 | VoIP server |
+| Mumble Server | 48000 (external), 64738 (internal) | VoIP server |
 | Faster Whisper | 5000 | Speech-to-text API |
 | Piper TTS | 5001 | Text-to-speech API |
 | Web Control Panel | 5002 | Management interface |
@@ -216,6 +222,8 @@ From here you can:
 | AI Bot | - | Mumble client |
 | SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
 | Mumble Web | 8081 | Web-based Mumble client |
+
+**Port 48000 Explanation:** The standard Mumble port 64738 is reserved by Windows Hyper-V on many systems. Port 48000 is used externally to avoid conflicts, while internal Docker services still communicate on 64738.
 | Mumble Web Simple | - | Simplified web client (build only) |
 
 ## Usage
@@ -262,7 +270,17 @@ Access at `http://localhost:5002`
 **Dashboard**
 - Total messages, unique users
 - Voice vs. text message counts
-- Auto-refresh every 10 seconds
+- Upcoming events for next 7 days with color-coded importance
+- Auto-refresh every 10 and 30 seconds
+
+**Schedule Manager** 📅
+- Full calendar view with month/week/day display
+- Add, edit, and delete events with drag-and-drop
+- Color-coded importance levels (Critical/High/Normal)
+- List view showing upcoming 30 days
+- Filter events by user
+- Click events to edit details
+- AI integration - bot extracts dates from conversations
 
 **Ollama Configuration**
 - Change server URL
@@ -331,12 +349,32 @@ Stay informed with daily AI-generated email summaries of all conversations:
 5. Enable "Daily Summaries" to activate automatic sending
 
 The bot will send beautifully formatted HTML emails with:
-- AI-generated conversation summaries using Ollama
-- Key highlights and important information
-- Activity statistics and metrics
-- Scheduled delivery at your chosen time (default: 10pm EST)
+- **Upcoming Events** - Next 7 days with color-coded importance badges
+- **Schedule Changes** - New events added in last 24 hours
+- **New Memories** - Recently extracted facts, tasks, and preferences with category icons
+- **AI-Generated Summary** - Intelligent conversation highlights using Ollama
+- **Professional Design** - Responsive HTML with gradient headers and card layouts
+- **Scheduled Delivery** - Automatic sending at your chosen time (default: 10pm EST)
 
 For detailed information, see [EMAIL_SUMMARIES_GUIDE.md](./EMAIL_SUMMARIES_GUIDE.md)
+
+### Schedule Manager
+
+Manage events and appointments with a full calendar interface:
+
+1. Go to `http://localhost:5002` and click "📅 Schedule Manager" in the top navigation
+2. **Add Events**: Click "+ Add Event" or click a date on the calendar
+3. **Edit Events**: Click any event on the calendar or in the list view below
+4. **Set Importance**: Choose 1-10 (Critical=8-10, High=5-7, Normal=1-4)
+5. **Color Coding**: Events automatically color-coded by importance level
+6. **Filter by User**: Select a user from the dropdown to show only their events
+7. **List View**: Scroll below calendar to see upcoming 30 days in detail
+
+**AI Integration:**
+- Tell the bot: "Schedule me for next Friday at 9:30am for haircut"
+- Bot automatically extracts date/time and creates calendar event
+- Bot uses Python-based date parser for accurate "next Friday", "tomorrow", etc.
+- Events appear in both calendar and upcoming events displays
 
 ### Setting a Persona
 
@@ -417,7 +455,7 @@ docker-compose logs -f mumble-bot
 ### Services not starting
 
 Ensure all ports are available:
-- 64738 (Mumble)
+- 48000 (Mumble - changed from 64738 to avoid Windows Hyper-V port conflicts)
 - 5000 (Whisper)
 - 5001 (Piper)
 

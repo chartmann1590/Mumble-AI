@@ -196,32 +196,166 @@ class EmailSummaryService:
             logger.error(f"Error getting conversation history: {e}")
             return []
 
-    def generate_summary_with_ollama(self, conversations: List[Dict]) -> str:
+    def get_schedule_events(self, days_ahead: int = 7) -> List[Dict]:
+        """Get upcoming schedule events"""
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT user_name, title, event_date, event_time, description, importance, created_at
+                    FROM schedule_events
+                    WHERE active = TRUE
+                      AND event_date >= CURRENT_DATE
+                      AND event_date <= CURRENT_DATE + INTERVAL '%s days'
+                    ORDER BY event_date, event_time
+                """, (days_ahead,))
+
+                rows = cursor.fetchall()
+
+                events = []
+                for row in rows:
+                    events.append({
+                        'user_name': row[0],
+                        'title': row[1],
+                        'event_date': row[2],
+                        'event_time': row[3],
+                        'description': row[4],
+                        'importance': row[5],
+                        'created_at': row[6]
+                    })
+
+                logger.info(f"Retrieved {len(events)} upcoming events")
+                return events
+        except Exception as e:
+            logger.error(f"Error getting schedule events: {e}")
+            return []
+
+    def get_schedule_changes(self, hours: int = 24) -> List[Dict]:
+        """Get schedule events created or modified in the last N hours"""
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT user_name, title, event_date, event_time, description, importance, created_at
+                    FROM schedule_events
+                    WHERE active = TRUE
+                      AND created_at >= NOW() - INTERVAL '%s hours'
+                    ORDER BY created_at DESC
+                """, (hours,))
+
+                rows = cursor.fetchall()
+
+                changes = []
+                for row in rows:
+                    changes.append({
+                        'user_name': row[0],
+                        'title': row[1],
+                        'event_date': row[2],
+                        'event_time': row[3],
+                        'description': row[4],
+                        'importance': row[5],
+                        'created_at': row[6]
+                    })
+
+                logger.info(f"Retrieved {len(changes)} schedule changes from last {hours} hours")
+                return changes
+        except Exception as e:
+            logger.error(f"Error getting schedule changes: {e}")
+            return []
+
+    def get_recent_memories(self, hours: int = 24) -> List[Dict]:
+        """Get persistent memories created in the last N hours"""
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT user_name, category, content, importance, extracted_at, event_date, event_time
+                    FROM persistent_memories
+                    WHERE active = TRUE
+                      AND extracted_at >= NOW() - INTERVAL '%s hours'
+                    ORDER BY importance DESC, extracted_at DESC
+                """, (hours,))
+
+                rows = cursor.fetchall()
+
+                memories = []
+                for row in rows:
+                    memories.append({
+                        'user_name': row[0],
+                        'category': row[1],
+                        'content': row[2],
+                        'importance': row[3],
+                        'extracted_at': row[4],
+                        'event_date': row[5],
+                        'event_time': row[6]
+                    })
+
+                logger.info(f"Retrieved {len(memories)} memories from last {hours} hours")
+                return memories
+        except Exception as e:
+            logger.error(f"Error getting recent memories: {e}")
+            return []
+
+    def generate_summary_with_ollama(self, conversations: List[Dict], schedule_events: List[Dict],
+                                     schedule_changes: List[Dict], memories: List[Dict]) -> str:
         """Generate a conversation summary using Ollama"""
-        if not conversations:
-            return "No conversations occurred in the last 24 hours."
+        if not conversations and not schedule_changes and not memories:
+            return "No activity in the last 24 hours."
 
         # Format conversations for Ollama
         conversation_text = ""
-        for conv in conversations:
-            timestamp_str = conv['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-            role = "User" if conv['role'] == 'user' else "Assistant"
-            conversation_text += f"[{timestamp_str}] {role} ({conv['user_name']}): {conv['message']}\n\n"
+        if conversations:
+            for conv in conversations:
+                timestamp_str = conv['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+                role = "User" if conv['role'] == 'user' else "Assistant"
+                conversation_text += f"[{timestamp_str}] {role} ({conv['user_name']}): {conv['message']}\n\n"
+        else:
+            conversation_text = "No conversations in the last 24 hours.\n\n"
+
+        # Format schedule changes
+        schedule_text = ""
+        if schedule_changes:
+            schedule_text = "**Schedule Changes Made:**\n"
+            for event in schedule_changes:
+                date_str = event['event_date'].strftime('%A, %B %d, %Y')
+                time_str = event['event_time'].strftime('%I:%M %p') if event['event_time'] else 'All day'
+                schedule_text += f"- {event['title']} - {date_str} at {time_str} (Added by {event['user_name']})\n"
+            schedule_text += "\n"
+
+        # Format upcoming events
+        upcoming_text = ""
+        if schedule_events:
+            upcoming_text = "**Upcoming Events (Next 7 Days):**\n"
+            for event in schedule_events:
+                date_str = event['event_date'].strftime('%A, %B %d, %Y')
+                time_str = event['event_time'].strftime('%I:%M %p') if event['event_time'] else 'All day'
+                upcoming_text += f"- {event['title']} - {date_str} at {time_str} ({event['user_name']})\n"
+            upcoming_text += "\n"
+
+        # Format memories
+        memory_text = ""
+        if memories:
+            memory_text = "**New Memories Extracted:**\n"
+            category_icons = {'schedule': '📅', 'fact': '💡', 'task': '✓', 'preference': '❤️', 'reminder': '⏰', 'other': '📌'}
+            for mem in memories:
+                icon = category_icons.get(mem['category'], '📌')
+                memory_text += f"- {icon} [{mem['category'].upper()}] {mem['content']} ({mem['user_name']})\n"
+            memory_text += "\n"
 
         # Create summary prompt
-        summary_prompt = f"""You are summarizing a day's worth of conversations from a Mumble AI voice assistant. Below are all the conversations from the last 24 hours.
+        summary_prompt = f"""You are summarizing a day's worth of activity from a Mumble AI voice assistant. Create a well-organized, friendly summary.
 
-Please create a well-organized summary with the following sections:
+{schedule_text}{upcoming_text}{memory_text}
 
-1. **Overview**: Brief summary of overall activity (number of conversations, unique users, topics discussed)
-2. **Key Conversations**: Highlight the most important or interesting exchanges
-3. **Persistent Information**: List any schedules, tasks, facts, or preferences that were discussed
-4. **Statistics**: Conversation count, most active users, time distribution
-
-Conversations:
+Conversations from the last 24 hours:
 {conversation_text}
 
-Generate a comprehensive but concise summary in markdown format:"""
+Create a comprehensive summary with these sections:
+1. **Overview**: Brief summary of overall activity
+2. **Highlights**: Most important conversations or events
+3. **New Information**: Any new schedules, tasks, facts, or preferences learned
+
+Keep it concise and friendly. Use markdown formatting:"""
 
         try:
             logger.info("Generating summary with Ollama...")
@@ -285,106 +419,347 @@ Generate a comprehensive but concise summary in markdown format:"""
 
         return summary
 
-    def format_html_email(self, summary: str, date_range: str) -> str:
+    def format_html_email(self, summary: str, date_range: str, schedule_events: List[Dict],
+                          schedule_changes: List[Dict], memories: List[Dict]) -> str:
         """Convert markdown summary to HTML email"""
-        # Simple markdown to HTML conversion
-        html = summary
-
-        # Convert headers
-        html = html.replace('# ', '<h1>').replace('\n## ', '</h1>\n<h2>').replace('\n### ', '</h2>\n<h3>')
-
-        # Bold
         import re
+
+        # Convert markdown to HTML
+        html = summary
         html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
-
-        # Lists
+        html = re.sub(r'^# (.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
+        html = re.sub(r'^## (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
         html = re.sub(r'^\- (.+)$', r'<li>\1</li>', html, flags=re.MULTILINE)
-
-        # Line breaks
         html = html.replace('\n\n', '</p><p>')
+        html = f'<p>{html}</p>'
 
-        # Wrap in HTML template
-        html_email = f"""
+        # Build schedule events HTML
+        schedule_html = ""
+        if schedule_events:
+            schedule_html = '<div class="section-card schedule-section">'
+            schedule_html += '<h2 class="section-title">📅 Upcoming Events (Next 7 Days)</h2>'
+            schedule_html += '<div class="events-grid">'
+
+            for event in schedule_events:
+                date_str = event['event_date'].strftime('%A, %b %d')
+                time_str = event['event_time'].strftime('%I:%M %p') if event['event_time'] else 'All day'
+                importance = event['importance']
+
+                # Color code by importance
+                if importance >= 8:
+                    badge_class = "badge-critical"
+                elif importance >= 6:
+                    badge_class = "badge-high"
+                else:
+                    badge_class = "badge-normal"
+
+                schedule_html += f'''
+                <div class="event-card">
+                    <div class="event-header">
+                        <span class="event-title">{event['title']}</span>
+                        <span class="importance-badge {badge_class}">{importance}</span>
+                    </div>
+                    <div class="event-details">
+                        <div class="event-date">📆 {date_str}</div>
+                        <div class="event-time">🕐 {time_str}</div>
+                        <div class="event-user">👤 {event['user_name']}</div>
+                    </div>
+                </div>
+                '''
+
+            schedule_html += '</div></div>'
+
+        # Build schedule changes HTML
+        changes_html = ""
+        if schedule_changes:
+            changes_html = '<div class="section-card changes-section">'
+            changes_html += '<h2 class="section-title">✨ Schedule Changes (Last 24 Hours)</h2>'
+            changes_html += '<ul class="changes-list">'
+
+            for change in schedule_changes:
+                date_str = change['event_date'].strftime('%a, %b %d')
+                time_str = change['event_time'].strftime('%I:%M %p') if change['event_time'] else 'All day'
+                changes_html += f'''
+                <li class="change-item">
+                    <strong>{change['title']}</strong> - {date_str} at {time_str}
+                    <span class="change-meta">Added by {change['user_name']}</span>
+                </li>
+                '''
+
+            changes_html += '</ul></div>'
+
+        # Build memories HTML
+        memories_html = ""
+        if memories:
+            memories_html = '<div class="section-card memories-section">'
+            memories_html += '<h2 class="section-title">🧠 New Memories (Last 24 Hours)</h2>'
+            memories_html += '<div class="memories-grid">'
+
+            category_icons = {
+                'schedule': '📅',
+                'fact': '💡',
+                'task': '✓',
+                'preference': '❤️',
+                'reminder': '⏰',
+                'other': '📌'
+            }
+            category_colors = {
+                'schedule': '#3498db',
+                'fact': '#2ecc71',
+                'task': '#e74c3c',
+                'preference': '#e91e63',
+                'reminder': '#f39c12',
+                'other': '#95a5a6'
+            }
+
+            for mem in memories:
+                icon = category_icons.get(mem['category'], '📌')
+                color = category_colors.get(mem['category'], '#95a5a6')
+
+                memories_html += f'''
+                <div class="memory-card" style="border-left-color: {color}">
+                    <div class="memory-header">
+                        <span class="memory-icon">{icon}</span>
+                        <span class="memory-category">{mem['category'].upper()}</span>
+                        <span class="memory-importance">{mem['importance']}/10</span>
+                    </div>
+                    <div class="memory-content">{mem['content']}</div>
+                    <div class="memory-meta">👤 {mem['user_name']}</div>
+                </div>
+                '''
+
+            memories_html += '</div></div>'
+
+        # Complete HTML email
+        html_email = f'''
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {{
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             line-height: 1.6;
             color: #333;
-            max-width: 800px;
-            margin: 0 auto;
+            margin: 0;
             padding: 20px;
-            background-color: #f4f4f4;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }}
         .email-container {{
-            background-color: white;
-            border-radius: 8px;
-            padding: 30px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
-        }}
-        h2 {{
-            color: #34495e;
-            margin-top: 25px;
-            border-bottom: 1px solid #ecf0f1;
-            padding-bottom: 5px;
-        }}
-        h3 {{
-            color: #7f8c8d;
-        }}
-        p {{
-            margin: 10px 0;
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
         }}
         .header {{
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 20px;
-            border-radius: 8px 8px 0 0;
-            margin: -30px -30px 20px -30px;
-        }}
-        .footer {{
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #ecf0f1;
-            color: #7f8c8d;
-            font-size: 0.9em;
+            padding: 40px 30px;
             text-align: center;
         }}
-        .stats {{
-            background-color: #ecf0f1;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 15px 0;
+        .header h1 {{
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
         }}
-        strong {{
+        .header p {{
+            margin: 10px 0 0 0;
+            opacity: 0.95;
+            font-size: 16px;
+        }}
+        .content {{
+            padding: 30px;
+        }}
+        .section-card {{
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border: 1px solid #e9ecef;
+        }}
+        .section-title {{
+            margin: 0 0 20px 0;
             color: #2c3e50;
+            font-size: 20px;
+            font-weight: 600;
+        }}
+        .events-grid {{
+            display: grid;
+            gap: 15px;
+        }}
+        .event-card {{
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }}
+        .event-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }}
+        .event-title {{
+            font-weight: 600;
+            color: #2c3e50;
+            font-size: 16px;
+        }}
+        .importance-badge {{
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: white;
+        }}
+        .badge-critical {{ background: #e74c3c; }}
+        .badge-high {{ background: #f39c12; }}
+        .badge-normal {{ background: #3498db; }}
+        .event-details {{
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            font-size: 14px;
+            color: #7f8c8d;
+        }}
+        .changes-list {{
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }}
+        .change-item {{
+            background: white;
+            padding: 12px 15px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border-left: 3px solid #2ecc71;
+        }}
+        .change-meta {{
+            display: block;
+            font-size: 13px;
+            color: #7f8c8d;
+            margin-top: 4px;
+        }}
+        .memories-grid {{
+            display: grid;
+            gap: 12px;
+        }}
+        .memory-card {{
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            border-left: 4px solid #95a5a6;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }}
+        .memory-header {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }}
+        .memory-icon {{
+            font-size: 18px;
+        }}
+        .memory-category {{
+            font-size: 11px;
+            font-weight: 600;
+            color: #7f8c8d;
+            background: #ecf0f1;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }}
+        .memory-importance {{
+            margin-left: auto;
+            font-size: 12px;
+            color: #95a5a6;
+            font-weight: 600;
+        }}
+        .memory-content {{
+            color: #2c3e50;
+            margin: 8px 0;
+            line-height: 1.5;
+        }}
+        .memory-meta {{
+            font-size: 12px;
+            color: #7f8c8d;
+        }}
+        .summary-section {{
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }}
+        .summary-section h2 {{
+            color: #2c3e50;
+            margin-top: 0;
+        }}
+        .summary-section h3 {{
+            color: #34495e;
+            margin-top: 20px;
+        }}
+        .summary-section p {{
+            color: #555;
+            margin: 10px 0;
+        }}
+        .summary-section li {{
+            margin: 5px 0;
+            color: #555;
+        }}
+        .footer {{
+            background: #f8f9fa;
+            padding: 25px 30px;
+            text-align: center;
+            border-top: 1px solid #e9ecef;
+            color: #7f8c8d;
+            font-size: 14px;
+        }}
+        .footer a {{
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }}
+        @media only screen and (max-width: 600px) {{
+            .email-container {{
+                border-radius: 0;
+            }}
+            .content {{
+                padding: 20px;
+            }}
+            .event-details {{
+                flex-direction: column;
+                gap: 5px;
+            }}
         }}
     </style>
 </head>
 <body>
     <div class="email-container">
         <div class="header">
-            <h1 style="margin: 0; border: none; color: white;">🤖 Mumble AI Daily Summary</h1>
-            <p style="margin: 5px 0 0 0; opacity: 0.9;">{date_range}</p>
+            <h1>🤖 Mumble AI Daily Summary</h1>
+            <p>{date_range}</p>
         </div>
 
-        {html}
+        <div class="content">
+            {schedule_html}
+            {changes_html}
+            {memories_html}
+
+            <div class="summary-section">
+                {html}
+            </div>
+        </div>
 
         <div class="footer">
-            <p>This is an automated summary from your Mumble AI assistant.</p>
-            <p>You can manage email settings at your <a href="http://localhost:5002">Web Control Panel</a></p>
+            <p><strong>This is your automated daily summary from Mumble AI</strong></p>
+            <p>Manage your settings at the <a href="http://localhost:5002">Web Control Panel</a></p>
         </div>
     </div>
 </body>
 </html>
-"""
+'''
         return html_email
 
     def send_email(self, settings: Dict, subject: str, html_content: str, plain_content: str) -> bool:
@@ -433,11 +808,14 @@ Generate a comprehensive but concise summary in markdown format:"""
         """Generate and send daily summary email"""
         logger.info("Starting daily summary generation...")
 
-        # Get conversation history
+        # Get all data
         conversations = self.get_conversation_history(hours=24)
+        schedule_events = self.get_schedule_events(days_ahead=7)
+        schedule_changes = self.get_schedule_changes(hours=24)
+        memories = self.get_recent_memories(hours=24)
 
-        # Generate summary
-        summary = self.generate_summary_with_ollama(conversations)
+        # Generate summary with all context
+        summary = self.generate_summary_with_ollama(conversations, schedule_events, schedule_changes, memories)
 
         # Format date range
         now = datetime.now(pytz.timezone(settings['timezone']))
@@ -446,7 +824,7 @@ Generate a comprehensive but concise summary in markdown format:"""
 
         # Create email content
         subject = f"Mumble AI Daily Summary - {now.strftime('%B %d, %Y')}"
-        html_content = self.format_html_email(summary, date_range)
+        html_content = self.format_html_email(summary, date_range, schedule_events, schedule_changes, memories)
         plain_content = f"Mumble AI Daily Summary\n{date_range}\n\n{summary}"
 
         # Send email
@@ -463,17 +841,21 @@ Generate a comprehensive but concise summary in markdown format:"""
         """Send a test email"""
         logger.info("Sending test email...")
 
-        # Get a few recent conversations for the test
+        # Get recent data for the test
         conversations = self.get_conversation_history(hours=24)
+        schedule_events = self.get_schedule_events(days_ahead=7)
+        schedule_changes = self.get_schedule_changes(hours=24)
+        memories = self.get_recent_memories(hours=24)
 
-        if conversations:
-            summary = f"# Test Email Summary\n\nThis is a test email from Mumble AI.\n\n**Recent activity**: {len(conversations)} messages in the last 24 hours."
+        # Generate summary with all data
+        if conversations or schedule_changes or memories:
+            summary = self.generate_summary_with_ollama(conversations, schedule_events, schedule_changes, memories)
         else:
-            summary = "# Test Email Summary\n\nThis is a test email from Mumble AI.\n\nNo recent conversations to display."
+            summary = "This is a test email from Mumble AI.\n\nNo recent activity to display."
 
         date_range = datetime.now(pytz.timezone(settings['timezone'])).strftime('%B %d, %Y')
         subject = f"[TEST] Mumble AI Summary - {date_range}"
-        html_content = self.format_html_email(summary, date_range)
+        html_content = self.format_html_email(summary, date_range, schedule_events, schedule_changes, memories)
         plain_content = f"Test Email from Mumble AI\n\n{summary}"
 
         return self.send_email(settings, subject, html_content, plain_content)

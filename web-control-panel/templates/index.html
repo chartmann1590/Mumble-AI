@@ -31,6 +31,38 @@
             text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         }
 
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            margin-bottom: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+        }
+
+        .nav-link {
+            background: white;
+            color: #667eea;
+            padding: 12px 25px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .nav-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -70,6 +102,7 @@
             border-radius: 10px;
             padding: 25px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
 
         .panel h2 {
@@ -201,11 +234,119 @@
         .full-width {
             grid-column: 1 / -1;
         }
+
+        .upcoming-events {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .upcoming-events h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .upcoming-events-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .event-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            transition: all 0.3s;
+        }
+
+        .event-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .event-item.high-importance {
+            border-left-color: #f97316;
+        }
+
+        .event-item.critical-importance {
+            border-left-color: #ef4444;
+        }
+
+        .event-info {
+            flex: 1;
+        }
+
+        .event-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .event-details {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .event-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .event-badge.normal {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .event-badge.high {
+            background: #fed7aa;
+            color: #c2410c;
+        }
+
+        .event-badge.critical {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .no-events {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+            font-style: italic;
+        }
+
+        .view-all-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+
+        .view-all-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎙️ Mumble AI Control Panel</h1>
+        <div class="header">
+            <h1>🎙️ Mumble AI Control Panel</h1>
+            <div class="nav-links">
+                <a href="/schedule" class="nav-link">📅 Schedule Manager</a>
+            </div>
+        </div>
 
         <!-- Statistics -->
         <div class="stats-grid">
@@ -224,6 +365,17 @@
             <div class="stat-card">
                 <h3>Text Messages</h3>
                 <div class="value" id="stat-text">0</div>
+            </div>
+        </div>
+
+        <!-- Upcoming Events -->
+        <div class="upcoming-events">
+            <h2>
+                📅 Upcoming Events (Next 7 Days)
+                <a href="/schedule" class="view-all-link">View All →</a>
+            </h2>
+            <div id="upcomingEventsList" class="upcoming-events-list">
+                <div class="no-events">Loading upcoming events...</div>
             </div>
         </div>
 
@@ -494,9 +646,11 @@
             loadConversations();
             loadMemories();
             loadEmailSettings();
+            loadUpcomingEvents();
 
-            // Refresh stats every 10 seconds
+            // Refresh stats and events periodically
             setInterval(loadStats, 10000);
+            setInterval(loadUpcomingEvents, 30000);
         });
 
         async function loadStats() {
@@ -510,6 +664,55 @@
                 document.getElementById('stat-text').textContent = data.text_messages;
             } catch (error) {
                 console.error('Error loading stats:', error);
+            }
+        }
+
+        async function loadUpcomingEvents() {
+            try {
+                const response = await fetch('/api/schedule/upcoming?days=7&limit=5');
+                const events = await response.json();
+
+                const container = document.getElementById('upcomingEventsList');
+
+                if (events.length === 0) {
+                    container.innerHTML = '<div class="no-events">No upcoming events in the next 7 days</div>';
+                    return;
+                }
+
+                container.innerHTML = events.map(event => {
+                    const date = new Date(event.event_date);
+                    const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    const timeStr = event.event_time ? ` at ${event.event_time.substring(0, 5)}` : '';
+
+                    const importance = event.importance;
+                    let importanceClass = 'normal';
+                    let importanceBadge = 'Normal';
+
+                    if (importance >= 8) {
+                        importanceClass = 'critical-importance';
+                        importanceBadge = 'Critical';
+                    } else if (importance >= 5) {
+                        importanceClass = 'high-importance';
+                        importanceBadge = 'High';
+                    }
+
+                    return `
+                        <div class="event-item ${importanceClass}">
+                            <div class="event-info">
+                                <div class="event-title">${event.title}</div>
+                                <div class="event-details">
+                                    ${event.user_name} • ${dateStr}${timeStr}
+                                    ${event.description ? ' • ' + event.description : ''}
+                                </div>
+                            </div>
+                            <span class="event-badge ${importanceClass.replace('-importance', '')}">${importanceBadge}</span>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Error loading upcoming events:', error);
+                document.getElementById('upcomingEventsList').innerHTML =
+                    '<div class="no-events">Error loading upcoming events</div>';
             }
         }
 
