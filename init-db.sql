@@ -151,9 +151,10 @@ FROM persistent_memories
 WHERE active = TRUE
 ORDER BY importance DESC, extracted_at DESC;
 
--- Create email settings table for daily summary emails
+-- Create email settings table for daily summary emails and email receiving
 CREATE TABLE IF NOT EXISTS email_settings (
     id SERIAL PRIMARY KEY,
+    -- SMTP settings (for sending emails)
     smtp_host VARCHAR(255) NOT NULL DEFAULT 'localhost',
     smtp_port INTEGER NOT NULL DEFAULT 25,
     smtp_username VARCHAR(255),
@@ -162,10 +163,24 @@ CREATE TABLE IF NOT EXISTS email_settings (
     smtp_use_ssl BOOLEAN DEFAULT FALSE,
     from_email VARCHAR(255) NOT NULL DEFAULT 'mumble-ai@localhost',
     recipient_email VARCHAR(255),
+    -- Daily summary settings
     daily_summary_enabled BOOLEAN DEFAULT FALSE,
     summary_time TIME DEFAULT '22:00:00',  -- 10pm
     timezone VARCHAR(50) DEFAULT 'America/New_York',  -- EST
     last_sent TIMESTAMP,
+    -- IMAP settings (for receiving emails)
+    imap_enabled BOOLEAN DEFAULT FALSE,
+    imap_host VARCHAR(255),
+    imap_port INTEGER DEFAULT 993,
+    imap_username VARCHAR(255),
+    imap_password VARCHAR(255),
+    imap_use_ssl BOOLEAN DEFAULT TRUE,
+    imap_mailbox VARCHAR(255) DEFAULT 'INBOX',
+    -- AI reply settings
+    auto_reply_enabled BOOLEAN DEFAULT FALSE,
+    reply_signature TEXT,
+    check_interval_seconds INTEGER DEFAULT 300,  -- Check every 5 minutes
+    last_checked TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -178,9 +193,50 @@ ON CONFLICT (id) DO NOTHING;
 -- Create index for email settings
 CREATE INDEX IF NOT EXISTS idx_email_last_sent ON email_settings(last_sent DESC);
 
+-- Create email user mappings table
+CREATE TABLE IF NOT EXISTS email_user_mappings (
+    id SERIAL PRIMARY KEY,
+    email_address VARCHAR(255) NOT NULL UNIQUE,
+    user_name VARCHAR(255) NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for email mappings
+CREATE INDEX IF NOT EXISTS idx_email_mappings_email ON email_user_mappings(email_address);
+CREATE INDEX IF NOT EXISTS idx_email_mappings_user ON email_user_mappings(user_name);
+
+-- Create email logs table
+CREATE TABLE IF NOT EXISTS email_logs (
+    id SERIAL PRIMARY KEY,
+    direction VARCHAR(10) NOT NULL CHECK (direction IN ('received', 'sent')),
+    email_type VARCHAR(20) NOT NULL CHECK (email_type IN ('reply', 'summary', 'test', 'other')),
+    from_email VARCHAR(255) NOT NULL,
+    to_email VARCHAR(255) NOT NULL,
+    subject TEXT,
+    body_preview TEXT,  -- First 500 chars of body
+    full_body TEXT,  -- Full email body
+    status VARCHAR(20) DEFAULT 'success' CHECK (status IN ('success', 'error', 'pending')),
+    error_message TEXT,
+    mapped_user VARCHAR(255),  -- User name from email mapping (if applicable)
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for email logs
+CREATE INDEX IF NOT EXISTS idx_email_logs_direction ON email_logs(direction);
+CREATE INDEX IF NOT EXISTS idx_email_logs_timestamp ON email_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_email_logs_from ON email_logs(from_email);
+CREATE INDEX IF NOT EXISTS idx_email_logs_to ON email_logs(to_email);
+CREATE INDEX IF NOT EXISTS idx_email_logs_type ON email_logs(email_type);
+CREATE INDEX IF NOT EXISTS idx_email_logs_status ON email_logs(status);
+
 COMMENT ON TABLE conversation_history IS 'Stores all conversation history between users and the AI bot';
 COMMENT ON COLUMN conversation_history.message_type IS 'Type of message: voice or text';
 COMMENT ON COLUMN conversation_history.role IS 'Role: user or assistant';
 COMMENT ON TABLE bot_config IS 'Stores bot configuration settings';
 COMMENT ON TABLE persistent_memories IS 'Stores important extracted memories like schedules, facts, preferences, and tasks';
 COMMENT ON TABLE email_settings IS 'Stores email configuration for daily summary emails';
+COMMENT ON TABLE email_user_mappings IS 'Maps email addresses to user names for personalized bot responses';
+COMMENT ON TABLE email_logs IS 'Logs all email activity including received and sent emails';

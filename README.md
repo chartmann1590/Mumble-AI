@@ -2,7 +2,7 @@
 
 A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech recognition, text-to-speech, conversation memory, and a web-based control panel.
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -17,6 +17,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Ollama Integration**: Local LLM support (llama3.2, qwen2.5-coder, gemma3, and more)
 - **Persistent Memories**: AI-powered automatic extraction and storage of schedules, facts, tasks, and preferences
 - **Smart Scheduling**: AI extracts dates from natural language ("next Friday at 3pm") and creates calendar events
+- **Duplicate Prevention**: Intelligent deduplication system prevents duplicate events and memories from being created
 - **Semantic Memory**: Dual memory architecture with short-term (session) and long-term (semantic search) context
 - **Context-Aware**: Intelligent conversation flow with anti-repetition and anti-hallucination safeguards
 - **Custom Personas**: Define and AI-enhance bot personalities
@@ -573,6 +574,7 @@ Download additional voices from https://github.com/rhasspy/piper and update the 
 - [API Reference](docs/API.md) - Complete API documentation
 - [Configuration](docs/CONFIGURATION.md) - Detailed configuration guide
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Deduplication System](docs/CHANGELOG_DEDUPLICATION_SYSTEM.md) - Schedule and memory duplicate prevention
 
 ## Development
 

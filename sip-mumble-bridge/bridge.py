@@ -848,6 +848,15 @@ CRITICAL RULES:
 2. Do NOT create entries with empty content
 3. If there's nothing important to remember, return an empty array: []
 4. You MUST respond with ONLY valid JSON, nothing else
+5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
+6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
+7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
+
+IMPORTANT: Query questions should return empty array. Examples:
+- "What's on my schedule?" → []
+- "Tell me about my calendar" → []
+- "Do I have anything tomorrow?" → []
+- "What do I have next week?" → []
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
@@ -930,12 +939,59 @@ JSON:"""
             logger.error(f"Error extracting memory: {e}")
 
     def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None, importance: int = 5, tags: List[str] = None, event_date: str = None, event_time: str = None):
-        """Save a persistent memory to the database"""
+        """Save a persistent memory to the database (with deduplication)"""
         conn = None
         try:
             conn = self.get_db_connection()
             if conn:
                 cursor = conn.cursor()
+
+                # Check for duplicates based on category type
+                if category == 'schedule' and event_date:
+                    # For schedule memories, check user, category, event_date, and event_time
+                    cursor.execute(
+                        """
+                        SELECT id, content, importance
+                        FROM persistent_memories
+                        WHERE user_name = %s AND category = %s AND event_date = %s
+                        AND event_time IS NOT DISTINCT FROM %s AND active = TRUE
+                        """,
+                        (user_name, category, event_date, event_time)
+                    )
+                else:
+                    # For non-schedule memories, check for exact content match
+                    cursor.execute(
+                        """
+                        SELECT id, importance
+                        FROM persistent_memories
+                        WHERE user_name = %s AND category = %s AND content = %s AND active = TRUE
+                        """,
+                        (user_name, category, content)
+                    )
+
+                existing = cursor.fetchone()
+
+                if existing:
+                    if category == 'schedule':
+                        existing_id, existing_content, existing_importance = existing
+                        logger.info(f"Duplicate schedule memory detected for {user_name} on {event_date}. Skipping. Existing ID: {existing_id}")
+                    else:
+                        existing_id, existing_importance = existing
+                        logger.info(f"Duplicate {category} memory detected for {user_name}: '{content[:50]}...'. Skipping. Existing ID: {existing_id}")
+
+                    # If new importance is higher, update it
+                    if importance > existing_importance:
+                        cursor.execute(
+                            "UPDATE persistent_memories SET importance = %s WHERE id = %s",
+                            (importance, existing_id)
+                        )
+                        conn.commit()
+                        logger.info(f"Updated importance of existing memory ID {existing_id} from {existing_importance} to {importance}")
+
+                    cursor.close()
+                    return
+
+                # No duplicate found, insert new memory
                 cursor.execute(
                     """
                     INSERT INTO persistent_memories
@@ -946,6 +1002,7 @@ JSON:"""
                 )
                 conn.commit()
                 cursor.close()
+                logger.info(f"Saved new {category} memory for {user_name}")
         except Exception as e:
             logger.error(f"Error saving persistent memory: {e}")
             if conn:
@@ -1016,7 +1073,7 @@ JSON:"""
 
     def add_schedule_event(self, user_name: str, title: str, event_date: str, event_time: str = None,
                           description: str = None, importance: int = 5) -> int:
-        """Add a new schedule event"""
+        """Add a new schedule event (with deduplication)"""
         conn = None
         try:
             conn = self.get_db_connection()
@@ -1024,6 +1081,54 @@ JSON:"""
                 return None
 
             cursor = conn.cursor()
+
+            # Check for duplicate: same user, title, and date
+            cursor.execute(
+                """
+                SELECT id, event_time, description, importance
+                FROM schedule_events
+                WHERE user_name = %s AND title = %s AND event_date = %s AND active = TRUE
+                """,
+                (user_name, title, event_date)
+            )
+
+            existing = cursor.fetchone()
+
+            if existing:
+                existing_id, existing_time, existing_desc, existing_importance = existing
+                logger.info(f"Duplicate schedule event detected for {user_name}: '{title}' on {event_date}. Using existing ID {existing_id}")
+
+                # If new info is more detailed, update the existing event
+                should_update = False
+                updates = []
+                params = []
+
+                if event_time and not existing_time:
+                    updates.append("event_time = %s")
+                    params.append(event_time)
+                    should_update = True
+
+                if description and not existing_desc:
+                    updates.append("description = %s")
+                    params.append(description)
+                    should_update = True
+
+                if importance and importance > existing_importance:
+                    updates.append("importance = %s")
+                    params.append(importance)
+                    should_update = True
+
+                if should_update:
+                    params.append(existing_id)
+                    update_query = f"UPDATE schedule_events SET {', '.join(updates)} WHERE id = %s"
+                    cursor.execute(update_query, params)
+                    conn.commit()
+                    logger.info(f"Updated existing schedule event ID {existing_id} with new details")
+
+                cursor.close()
+                return existing_id
+
+            # No duplicate found, create new event
             cursor.execute(
                 """
                 INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance)
@@ -1258,6 +1363,12 @@ If scheduling action is needed, extract:
 - Importance (1-10, default 5)
 - Event ID (if updating/deleting - look for "that event", "the appointment", etc.)
 
+CRITICAL INSTRUCTIONS:
+- ONLY use action "ADD" if the user is CREATING or SCHEDULING a NEW event
+- If the user is ASKING, QUERYING, READING, or CHECKING their schedule, ALWAYS use action "NOTHING"
+- DO NOT create events when the user asks "what's on my calendar", "tell me my schedule", "what do I have", "do I have anything", etc.
+- When in doubt, use "NOTHING" - it's better to not create than to create a duplicate
+
 IMPORTANT: For relative dates like "next Friday", just return "next Friday" - do NOT calculate the actual date.
 
 Respond ONLY with a JSON object (no markdown, no extra text):
@@ -1274,6 +1385,15 @@ User: "Cancel my meeting on Monday"
 {{"action": "DELETE", "title": "meeting", "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
 
 User: "What's on my schedule?"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "Tell me about my calendar"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "Do I have anything tomorrow?"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "What do I have next week?"
 {{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
 """
 
@@ -1530,9 +1650,9 @@ SCHEDULING CAPABILITIES:
                 )
                 logger.info(f"Retrieved {len(schedule_events)} schedule events for {user_name}")
 
-            # Add schedule events to context
+            # Add schedule events to context - ALWAYS include this section
+            full_prompt += f"📅 {user_name.upper()}'S UPCOMING SCHEDULE (next 30 days from {current_datetime.strftime('%A, %B %d, %Y')}):\n"
             if schedule_events:
-                full_prompt += "📅 YOUR UPCOMING SCHEDULE (next 30 days):\n"
                 for event in schedule_events:
                     event_date_obj = event['event_date']
                     event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
@@ -1541,7 +1661,17 @@ SCHEDULING CAPABILITIES:
                     full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
                     if event['description']:
                         full_prompt += f"   Details: {event['description']}\n"
-                full_prompt += "\nUse this schedule information to answer questions about your plans, appointments, and events.\n\n"
+                full_prompt += "\n⚠️ CRITICAL SCHEDULE INSTRUCTIONS:\n"
+                full_prompt += "- These are the ONLY events scheduled. Do not mention any events not listed above.\n"
+                full_prompt += "- Use the EXACT dates shown. Do not guess or approximate dates.\n"
+                full_prompt += "- If asked about a specific time period, only mention events that fall within that period based on the dates shown.\n\n"
+            else:
+                full_prompt += "NO EVENTS SCHEDULED\n\n"
+                full_prompt += "⚠️ CRITICAL: The schedule is EMPTY. When asked about schedule/calendar:\n"
+                full_prompt += "- Say clearly: \"You don't have anything on your schedule\" or \"Your calendar is clear\"\n"
+                full_prompt += "- DO NOT make up events, appointments, or plans\n"
+                full_prompt += "- DO NOT suggest events that might exist\n"
+                full_prompt += "- DO NOT hallucinate schedule information\n\n"
 
             # Add persistent memories to context
             if persistent_memories:

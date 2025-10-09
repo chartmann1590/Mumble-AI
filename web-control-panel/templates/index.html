@@ -626,10 +626,162 @@
                 </div>
             </div>
 
+            <div class="grid" style="grid-template-columns: 1fr 1fr; margin-top: 20px;">
+                <!-- IMAP Configuration -->
+                <div>
+                    <h3 style="color: #667eea; margin-bottom: 15px;">📥 IMAP Configuration (Email Receiving)</h3>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="email-imap-enabled" style="width: auto;">
+                            Enable IMAP Email Receiving
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>IMAP Host</label>
+                        <input type="text" id="email-imap-host" placeholder="imap.gmail.com">
+                    </div>
+                    <div class="form-group">
+                        <label>IMAP Port</label>
+                        <input type="number" id="email-imap-port" placeholder="993" value="993">
+                    </div>
+                    <div class="form-group">
+                        <label>IMAP Username</label>
+                        <input type="text" id="email-imap-username" placeholder="your-email@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>IMAP Password</label>
+                        <input type="password" id="email-imap-password" placeholder="password or app password">
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="email-imap-ssl" style="width: auto;" checked>
+                            Use SSL
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Mailbox/Folder</label>
+                        <input type="text" id="email-imap-mailbox" placeholder="INBOX" value="INBOX">
+                    </div>
+                </div>
+
+                <!-- AI Reply Configuration -->
+                <div>
+                    <h3 style="color: #667eea; margin-bottom: 15px;">🤖 AI Auto-Reply Settings</h3>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="email-auto-reply-enabled" style="width: auto;">
+                            Enable AI Auto-Reply
+                        </label>
+                        <small style="color: #666; display: block; margin-top: 5px;">
+                            When enabled, the AI will automatically reply to incoming emails using Ollama
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label>Check Interval (seconds)</label>
+                        <input type="number" id="email-check-interval" placeholder="300" value="300" min="60">
+                        <small style="color: #666;">How often to check for new emails (default: 300 = 5 minutes)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Reply Signature (optional)</label>
+                        <textarea id="email-reply-signature" rows="3" placeholder="Best regards,&#10;AI Assistant&#10;Mumble AI System"></textarea>
+                        <small style="color: #666;">Will be appended to all AI-generated email replies</small>
+                        <button onclick="generateEmailSignature()" style="margin-top: 8px; background: #9b59b6; padding: 8px 16px; font-size: 14px;">
+                            🤖 Generate Signature from Persona
+                        </button>
+                    </div>
+                    <div class="form-group" id="email-last-checked-display" style="padding: 10px; background: #f5f5f5; border-radius: 5px; display: none;">
+                        <strong>Last Checked:</strong> <span id="email-last-checked">Never</span>
+                    </div>
+                </div>
+            </div>
+
             <div style="margin-top: 20px; display: flex; gap: 10px;">
                 <button onclick="saveEmailSettings()">Save Email Settings</button>
                 <button onclick="sendTestEmail()">Send Test Email</button>
                 <button onclick="loadEmailSettings()" class="secondary">Refresh</button>
+            </div>
+
+            <!-- Email User Mappings Section -->
+            <div style="margin-top: 40px;">
+                <h3 style="color: #667eea; margin-bottom: 15px;">📧 Email-to-User Mappings</h3>
+                <p style="margin-bottom: 15px; color: #666;">Map email addresses to specific users so the bot uses their memories and schedule when replying.</p>
+
+                <div style="margin-bottom: 15px;">
+                    <button onclick="showAddMappingForm()">+ Add New Mapping</button>
+                </div>
+
+                <!-- Add Mapping Form (hidden by default) -->
+                <div id="add-mapping-form" style="display: none; background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                    <h4 style="margin-top: 0;">Add Email Mapping</h4>
+                    <div class="form-group">
+                        <label>Email Address</label>
+                        <input type="email" id="new-mapping-email" placeholder="john@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>User Name</label>
+                        <input type="text" id="new-mapping-user" placeholder="Charles">
+                        <small style="color: #666;">The user name from your system (used to look up memories and schedule)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Notes (optional)</label>
+                        <input type="text" id="new-mapping-notes" placeholder="e.g., My personal email">
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="addEmailMapping()">Add Mapping</button>
+                        <button onclick="cancelAddMapping()" class="secondary">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Mappings List -->
+                <div id="email-mappings-list" style="margin-top: 20px;">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Email Logs Section -->
+            <div style="margin-top: 40px;">
+                <h3 style="color: #667eea; margin-bottom: 15px;">📬 Email Activity Logs</h3>
+                <p style="margin-bottom: 15px; color: #666;">View all email activity including received emails and sent replies.</p>
+
+                <!-- Filters -->
+                <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div class="form-group" style="margin: 0;">
+                            <label>Direction</label>
+                            <select id="log-filter-direction" onchange="loadEmailLogs()">
+                                <option value="">All</option>
+                                <option value="received">Received</option>
+                                <option value="sent">Sent</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin: 0;">
+                            <label>Type</label>
+                            <select id="log-filter-type" onchange="loadEmailLogs()">
+                                <option value="">All</option>
+                                <option value="reply">Reply</option>
+                                <option value="summary">Summary</option>
+                                <option value="test">Test</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin: 0;">
+                            <label>Status</label>
+                            <select id="log-filter-status" onchange="loadEmailLogs()">
+                                <option value="">All</option>
+                                <option value="success">Success</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; align-items: flex-end;">
+                            <button onclick="loadEmailLogs()" class="secondary">🔄 Refresh</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs List -->
+                <div id="email-logs-list" style="margin-top: 20px;">
+                    <!-- Populated by JavaScript -->
+                </div>
             </div>
         </div>
     </div>
@@ -646,6 +798,8 @@
             loadConversations();
             loadMemories();
             loadEmailSettings();
+            loadEmailMappings();
+            loadEmailLogs();
             loadUpcomingEvents();
 
             // Refresh stats and events periodically
@@ -1378,6 +1532,7 @@
                 const response = await fetch('/api/email/settings');
                 const data = await response.json();
 
+                // SMTP settings
                 document.getElementById('email-smtp-host').value = data.smtp_host || '';
                 document.getElementById('email-smtp-port').value = data.smtp_port || 25;
                 document.getElementById('email-smtp-username').value = data.smtp_username || '';
@@ -1386,15 +1541,39 @@
                 document.getElementById('email-smtp-ssl').checked = data.smtp_use_ssl || false;
                 document.getElementById('email-from').value = data.from_email || '';
                 document.getElementById('email-recipient').value = data.recipient_email || '';
+
+                // Daily summary settings
                 document.getElementById('email-summary-time').value = data.summary_time ? data.summary_time.substring(0, 5) : '22:00';
                 document.getElementById('email-timezone').value = data.timezone || 'America/New_York';
                 document.getElementById('email-enabled').checked = data.daily_summary_enabled || false;
 
+                // IMAP settings
+                document.getElementById('email-imap-enabled').checked = data.imap_enabled || false;
+                document.getElementById('email-imap-host').value = data.imap_host || '';
+                document.getElementById('email-imap-port').value = data.imap_port || 993;
+                document.getElementById('email-imap-username').value = data.imap_username || '';
+                document.getElementById('email-imap-password').value = ''; // Don't populate password
+                document.getElementById('email-imap-ssl').checked = data.imap_use_ssl !== false; // Default true
+                document.getElementById('email-imap-mailbox').value = data.imap_mailbox || 'INBOX';
+
+                // AI reply settings
+                document.getElementById('email-auto-reply-enabled').checked = data.auto_reply_enabled || false;
+                document.getElementById('email-check-interval').value = data.check_interval_seconds || 300;
+                document.getElementById('email-reply-signature').value = data.reply_signature || '';
+
+                // Display timestamps
                 if (data.last_sent) {
                     document.getElementById('email-last-sent-display').style.display = 'block';
                     document.getElementById('email-last-sent').textContent = new Date(data.last_sent).toLocaleString();
                 } else {
                     document.getElementById('email-last-sent-display').style.display = 'none';
+                }
+
+                if (data.last_checked) {
+                    document.getElementById('email-last-checked-display').style.display = 'block';
+                    document.getElementById('email-last-checked').textContent = new Date(data.last_checked).toLocaleString();
+                } else {
+                    document.getElementById('email-last-checked-display').style.display = 'none';
                 }
             } catch (error) {
                 console.error('Error loading email settings:', error);
@@ -1405,6 +1584,7 @@
         async function saveEmailSettings() {
             try {
                 const settings = {
+                    // SMTP settings
                     smtp_host: document.getElementById('email-smtp-host').value,
                     smtp_port: parseInt(document.getElementById('email-smtp-port').value),
                     smtp_username: document.getElementById('email-smtp-username').value,
@@ -1412,15 +1592,32 @@
                     smtp_use_ssl: document.getElementById('email-smtp-ssl').checked,
                     from_email: document.getElementById('email-from').value,
                     recipient_email: document.getElementById('email-recipient').value,
+                    // Daily summary settings
                     summary_time: document.getElementById('email-summary-time').value + ':00',
                     timezone: document.getElementById('email-timezone').value,
-                    daily_summary_enabled: document.getElementById('email-enabled').checked
+                    daily_summary_enabled: document.getElementById('email-enabled').checked,
+                    // IMAP settings
+                    imap_enabled: document.getElementById('email-imap-enabled').checked,
+                    imap_host: document.getElementById('email-imap-host').value,
+                    imap_port: parseInt(document.getElementById('email-imap-port').value),
+                    imap_username: document.getElementById('email-imap-username').value,
+                    imap_use_ssl: document.getElementById('email-imap-ssl').checked,
+                    imap_mailbox: document.getElementById('email-imap-mailbox').value,
+                    // AI reply settings
+                    auto_reply_enabled: document.getElementById('email-auto-reply-enabled').checked,
+                    reply_signature: document.getElementById('email-reply-signature').value,
+                    check_interval_seconds: parseInt(document.getElementById('email-check-interval').value)
                 };
 
-                // Only include password if it was entered
-                const password = document.getElementById('email-smtp-password').value;
-                if (password) {
-                    settings.smtp_password = password;
+                // Only include passwords if they were entered
+                const smtp_password = document.getElementById('email-smtp-password').value;
+                if (smtp_password) {
+                    settings.smtp_password = smtp_password;
+                }
+
+                const imap_password = document.getElementById('email-imap-password').value;
+                if (imap_password) {
+                    settings.imap_password = imap_password;
                 }
 
                 const response = await fetch('/api/email/settings', {
@@ -1461,6 +1658,257 @@
             } catch (error) {
                 console.error('Error sending test email:', error);
                 alert('Error sending test email: ' + error.message);
+            }
+        }
+
+        async function generateEmailSignature() {
+            try {
+                // Show loading indicator
+                const button = event.target;
+                const originalText = button.textContent;
+                button.textContent = '⏳ Generating...';
+                button.disabled = true;
+
+                const response = await fetch('/api/email/generate-signature', {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.signature) {
+                    // Populate the signature field
+                    document.getElementById('email-reply-signature').value = data.signature;
+                    alert('Email signature generated! Review and save if you like it.');
+                } else {
+                    alert('Error generating signature: ' + (data.error || 'Unknown error'));
+                }
+
+                // Restore button
+                button.textContent = originalText;
+                button.disabled = false;
+            } catch (error) {
+                console.error('Error generating signature:', error);
+                alert('Error generating signature: ' + error.message);
+                // Restore button
+                event.target.textContent = '🤖 Generate Signature from Persona';
+                event.target.disabled = false;
+            }
+        }
+
+        // Email User Mappings Functions
+        async function loadEmailMappings() {
+            try {
+                const response = await fetch('/api/email/mappings');
+                const mappings = await response.json();
+
+                const listDiv = document.getElementById('email-mappings-list');
+
+                if (mappings.length === 0) {
+                    listDiv.innerHTML = '<p style="color: #666; font-style: italic;">No email mappings configured. Add one to map email addresses to users.</p>';
+                    return;
+                }
+
+                let html = '<table style="width: 100%; border-collapse: collapse;">';
+                html += '<thead><tr style="background: #f5f5f5; text-align: left;">';
+                html += '<th style="padding: 10px; border-bottom: 2px solid #ddd;">Email Address</th>';
+                html += '<th style="padding: 10px; border-bottom: 2px solid #ddd;">User Name</th>';
+                html += '<th style="padding: 10px; border-bottom: 2px solid #ddd;">Notes</th>';
+                html += '<th style="padding: 10px; border-bottom: 2px solid #ddd; width: 100px;">Actions</th>';
+                html += '</tr></thead><tbody>';
+
+                mappings.forEach(mapping => {
+                    html += '<tr style="border-bottom: 1px solid #eee;">';
+                    html += `<td style="padding: 10px;">${mapping.email_address}</td>`;
+                    html += `<td style="padding: 10px;"><strong>${mapping.user_name}</strong></td>`;
+                    html += `<td style="padding: 10px;">${mapping.notes || '<span style="color: #999;">-</span>'}</td>`;
+                    html += `<td style="padding: 10px;">`;
+                    html += `<button onclick="deleteEmailMapping(${mapping.id})" style="background: #e74c3c; padding: 5px 10px; font-size: 12px;">Delete</button>`;
+                    html += `</td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                listDiv.innerHTML = html;
+
+            } catch (error) {
+                console.error('Error loading email mappings:', error);
+                document.getElementById('email-mappings-list').innerHTML = '<p style="color: #e74c3c;">Error loading mappings</p>';
+            }
+        }
+
+        function showAddMappingForm() {
+            document.getElementById('add-mapping-form').style.display = 'block';
+            document.getElementById('new-mapping-email').value = '';
+            document.getElementById('new-mapping-user').value = '';
+            document.getElementById('new-mapping-notes').value = '';
+            document.getElementById('new-mapping-email').focus();
+        }
+
+        function cancelAddMapping() {
+            document.getElementById('add-mapping-form').style.display = 'none';
+        }
+
+        async function addEmailMapping() {
+            try {
+                const email = document.getElementById('new-mapping-email').value.trim();
+                const userName = document.getElementById('new-mapping-user').value.trim();
+                const notes = document.getElementById('new-mapping-notes').value.trim();
+
+                if (!email || !userName) {
+                    alert('Email address and user name are required');
+                    return;
+                }
+
+                const response = await fetch('/api/email/mappings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        email_address: email,
+                        user_name: userName,
+                        notes: notes
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    cancelAddMapping();
+                    loadEmailMappings();
+                    alert('Email mapping added successfully!');
+                } else {
+                    alert('Error adding mapping: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error adding mapping:', error);
+                alert('Error adding mapping: ' + error.message);
+            }
+        }
+
+        async function deleteEmailMapping(id) {
+            if (!confirm('Are you sure you want to delete this email mapping?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/email/mappings/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    loadEmailMappings();
+                    alert('Email mapping deleted successfully');
+                } else {
+                    alert('Error deleting mapping');
+                }
+            } catch (error) {
+                console.error('Error deleting mapping:', error);
+                alert('Error deleting mapping: ' + error.message);
+            }
+        }
+
+        // Email Logs Functions
+        async function loadEmailLogs() {
+            try {
+                const direction = document.getElementById('log-filter-direction').value;
+                const type = document.getElementById('log-filter-type').value;
+                const status = document.getElementById('log-filter-status').value;
+
+                // Build query string
+                const params = new URLSearchParams();
+                if (direction) params.append('direction', direction);
+                if (type) params.append('type', type);
+                if (status) params.append('status', status);
+                params.append('limit', 50);  // Show last 50 logs
+
+                const response = await fetch(`/api/email/logs?${params.toString()}`);
+                const data = await response.json();
+
+                const listDiv = document.getElementById('email-logs-list');
+
+                if (!data.logs || data.logs.length === 0) {
+                    listDiv.innerHTML = '<p style="color: #666; font-style: italic;">No email logs found. Email activity will appear here once emails are sent or received.</p>';
+                    return;
+                }
+
+                let html = '<div style="background: #f5f5f5; padding: 10px; border-radius: 8px; margin-bottom: 10px;">';
+                html += `<strong>Showing ${data.logs.length} of ${data.total} logs</strong>`;
+                html += '</div>';
+
+                data.logs.forEach(log => {
+                    const timestamp = new Date(log.timestamp).toLocaleString();
+                    const directionIcon = log.direction === 'received' ? '📥' : '📤';
+                    const statusColor = log.status === 'success' ? '#2ecc71' : '#e74c3c';
+                    const statusIcon = log.status === 'success' ? '✓' : '✗';
+
+                    // Type badge color
+                    let typeBadgeColor = '#3498db';
+                    if (log.email_type === 'summary') typeBadgeColor = '#9b59b6';
+                    else if (log.email_type === 'test') typeBadgeColor = '#f39c12';
+                    else if (log.email_type === 'reply') typeBadgeColor = '#2ecc71';
+
+                    html += '<div style="background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 15px;">';
+
+                    // Header row
+                    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
+                    html += `<div style="display: flex; align-items: center; gap: 10px;">`;
+                    html += `<span style="font-size: 24px;">${directionIcon}</span>`;
+                    html += `<span style="background: ${typeBadgeColor}; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase;">${log.email_type}</span>`;
+                    html += `<span style="color: ${statusColor}; font-weight: bold;">${statusIcon} ${log.status.toUpperCase()}</span>`;
+                    html += `</div>`;
+                    html += `<div style="color: #999; font-size: 14px;">${timestamp}</div>`;
+                    html += '</div>';
+
+                    // Email details
+                    html += '<div style="display: grid; grid-template-columns: auto 1fr; gap: 10px; margin-bottom: 10px;">';
+                    html += `<strong>From:</strong><span>${log.from_email}</span>`;
+                    html += `<strong>To:</strong><span>${log.to_email}</span>`;
+                    if (log.subject) {
+                        html += `<strong>Subject:</strong><span>${log.subject}</span>`;
+                    }
+                    if (log.mapped_user) {
+                        html += `<strong>Mapped User:</strong><span style="background: #e3f2fd; padding: 2px 8px; border-radius: 4px;">👤 ${log.mapped_user}</span>`;
+                    }
+                    if (log.error_message) {
+                        html += `<strong>Error:</strong><span style="color: #e74c3c;">${log.error_message}</span>`;
+                    }
+                    html += '</div>';
+
+                    // Body preview with expand button
+                    if (log.body_preview) {
+                        html += '<div style="margin-top: 10px;">';
+                        html += '<strong>Body Preview:</strong>';
+                        html += `<div id="preview-${log.id}" style="background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 5px; max-height: 100px; overflow: hidden; white-space: pre-wrap; font-family: monospace; font-size: 12px;">${log.body_preview}</div>`;
+                        if (log.full_body && log.full_body.length > 500) {
+                            html += `<button onclick="toggleEmailBody(${log.id}, ${log.full_body.length > 500})" id="toggle-btn-${log.id}" style="margin-top: 5px; font-size: 12px; background: #667eea;">Show Full Body</button>`;
+                            html += `<div id="fullbody-${log.id}" style="display: none; background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 5px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px;">${log.full_body}</div>`;
+                        }
+                        html += '</div>';
+                    }
+
+                    html += '</div>';
+                });
+
+                listDiv.innerHTML = html;
+
+            } catch (error) {
+                console.error('Error loading email logs:', error);
+                document.getElementById('email-logs-list').innerHTML = '<p style="color: #e74c3c;">Error loading email logs</p>';
+            }
+        }
+
+        function toggleEmailBody(logId, hasFullBody) {
+            const previewDiv = document.getElementById(`preview-${logId}`);
+            const fullBodyDiv = document.getElementById(`fullbody-${logId}`);
+            const button = document.getElementById(`toggle-btn-${logId}`);
+
+            if (fullBodyDiv.style.display === 'none') {
+                previewDiv.style.display = 'none';
+                fullBodyDiv.style.display = 'block';
+                button.textContent = 'Show Preview';
+            } else {
+                previewDiv.style.display = 'block';
+                fullBodyDiv.style.display = 'none';
+                button.textContent = 'Show Full Body';
             }
         }
     </script>

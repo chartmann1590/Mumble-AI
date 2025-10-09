@@ -754,7 +754,9 @@ def get_email_settings():
     cursor.execute("""
         SELECT smtp_host, smtp_port, smtp_username, smtp_use_tls, smtp_use_ssl,
                from_email, recipient_email, daily_summary_enabled, summary_time,
-               timezone, last_sent
+               timezone, last_sent, imap_enabled, imap_host, imap_port, imap_username,
+               imap_use_ssl, imap_mailbox, auto_reply_enabled, reply_signature,
+               check_interval_seconds, last_checked
         FROM email_settings
         WHERE id = 1
     """)
@@ -777,7 +779,17 @@ def get_email_settings():
         'daily_summary_enabled': row[7],
         'summary_time': str(row[8]) if row[8] else '22:00:00',
         'timezone': row[9],
-        'last_sent': row[10].isoformat() if row[10] else None
+        'last_sent': row[10].isoformat() if row[10] else None,
+        'imap_enabled': row[11] if row[11] is not None else False,
+        'imap_host': row[12],
+        'imap_port': row[13] if row[13] is not None else 993,
+        'imap_username': row[14],
+        'imap_use_ssl': row[15] if row[15] is not None else True,
+        'imap_mailbox': row[16] if row[16] else 'INBOX',
+        'auto_reply_enabled': row[17] if row[17] is not None else False,
+        'reply_signature': row[18] if row[18] else '',
+        'check_interval_seconds': row[19] if row[19] is not None else 300,
+        'last_checked': row[20].isoformat() if row[20] else None
     })
 
 @app.route('/api/email/settings', methods=['POST'])
@@ -791,6 +803,7 @@ def update_email_settings():
     updates = []
     params = []
 
+    # SMTP settings
     if 'smtp_host' in data:
         updates.append("smtp_host = %s")
         params.append(data['smtp_host'])
@@ -823,6 +836,7 @@ def update_email_settings():
         updates.append("recipient_email = %s")
         params.append(data['recipient_email'])
 
+    # Daily summary settings
     if 'daily_summary_enabled' in data:
         updates.append("daily_summary_enabled = %s")
         params.append(data['daily_summary_enabled'])
@@ -834,6 +848,48 @@ def update_email_settings():
     if 'timezone' in data:
         updates.append("timezone = %s")
         params.append(data['timezone'])
+
+    # IMAP settings
+    if 'imap_enabled' in data:
+        updates.append("imap_enabled = %s")
+        params.append(data['imap_enabled'])
+
+    if 'imap_host' in data:
+        updates.append("imap_host = %s")
+        params.append(data['imap_host'])
+
+    if 'imap_port' in data:
+        updates.append("imap_port = %s")
+        params.append(data['imap_port'])
+
+    if 'imap_username' in data:
+        updates.append("imap_username = %s")
+        params.append(data['imap_username'])
+
+    if 'imap_password' in data:
+        updates.append("imap_password = %s")
+        params.append(data['imap_password'])
+
+    if 'imap_use_ssl' in data:
+        updates.append("imap_use_ssl = %s")
+        params.append(data['imap_use_ssl'])
+
+    if 'imap_mailbox' in data:
+        updates.append("imap_mailbox = %s")
+        params.append(data['imap_mailbox'])
+
+    # AI reply settings
+    if 'auto_reply_enabled' in data:
+        updates.append("auto_reply_enabled = %s")
+        params.append(data['auto_reply_enabled'])
+
+    if 'reply_signature' in data:
+        updates.append("reply_signature = %s")
+        params.append(data['reply_signature'])
+
+    if 'check_interval_seconds' in data:
+        updates.append("check_interval_seconds = %s")
+        params.append(data['check_interval_seconds'])
 
     if updates:
         updates.append("updated_at = CURRENT_TIMESTAMP")
@@ -949,6 +1005,298 @@ def send_test_email():
         smtp.quit()
 
         return jsonify({'success': True, 'message': 'Test email sent successfully'})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/generate-signature', methods=['POST'])
+def generate_email_signature():
+    """Generate an email signature based on the bot's persona using AI"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get bot persona and Ollama config
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'bot_persona'")
+        row = cursor.fetchone()
+        bot_persona = row[0] if row else "a helpful AI assistant"
+
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_url'")
+        row = cursor.fetchone()
+        ollama_url = row[0] if row else 'http://host.docker.internal:11434'
+
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+        row = cursor.fetchone()
+        ollama_model = row[0] if row else 'llama3.2:latest'
+
+        cursor.close()
+        conn.close()
+
+        # Generate signature using Ollama
+        import requests
+
+        signature_prompt = f"""You are {bot_persona}.
+
+Generate a professional email signature for yourself that will be used in email replies. The signature should:
+- Be concise (2-4 lines maximum)
+- Reflect your personality/persona
+- Be professional but friendly
+- Include a sign-off like "Best regards" or similar
+- DO NOT include contact information, emails, or phone numbers
+- Just the text - no HTML or markdown formatting
+
+Example format:
+Best regards,
+[Your Name/Title]
+[Optional tagline]
+
+Your signature:"""
+
+        response = requests.post(
+            f"{ollama_url}/api/generate",
+            json={
+                'model': ollama_model,
+                'prompt': signature_prompt,
+                'stream': False,
+                'options': {
+                    'temperature': 0.7,
+                    'num_predict': 150
+                }
+            },
+            timeout=60
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            signature = result.get('response', '').strip()
+            return jsonify({'success': True, 'signature': signature})
+        else:
+            return jsonify({'error': 'Failed to generate signature from Ollama'}), 500
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# Email User Mappings API
+@app.route('/api/email/mappings', methods=['GET'])
+def get_email_mappings():
+    """Get all email user mappings"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, email_address, user_name, notes, created_at, updated_at
+            FROM email_user_mappings
+            ORDER BY created_at DESC
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        mappings = []
+        for row in rows:
+            mappings.append({
+                'id': row[0],
+                'email_address': row[1],
+                'user_name': row[2],
+                'notes': row[3],
+                'created_at': row[4].isoformat() if row[4] else None,
+                'updated_at': row[5].isoformat() if row[5] else None
+            })
+
+        return jsonify(mappings)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/mappings', methods=['POST'])
+def add_email_mapping():
+    """Add a new email user mapping"""
+    try:
+        data = request.json
+        email_address = data.get('email_address', '').strip()
+        user_name = data.get('user_name', '').strip()
+        notes = data.get('notes', '').strip()
+
+        if not email_address or not user_name:
+            return jsonify({'error': 'email_address and user_name are required'}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO email_user_mappings (email_address, user_name, notes)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        """, (email_address, user_name, notes if notes else None))
+
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({'success': True, 'id': new_id})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/mappings/<int:mapping_id>', methods=['PUT'])
+def update_email_mapping(mapping_id):
+    """Update an existing email user mapping"""
+    try:
+        data = request.json
+        email_address = data.get('email_address', '').strip()
+        user_name = data.get('user_name', '').strip()
+        notes = data.get('notes', '').strip()
+
+        if not email_address or not user_name:
+            return jsonify({'error': 'email_address and user_name are required'}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE email_user_mappings
+            SET email_address = %s,
+                user_name = %s,
+                notes = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (email_address, user_name, notes if notes else None, mapping_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/mappings/<int:mapping_id>', methods=['DELETE'])
+def delete_email_mapping(mapping_id):
+    """Delete an email user mapping"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            DELETE FROM email_user_mappings
+            WHERE id = %s
+        """, (mapping_id,))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/logs', methods=['GET'])
+def get_email_logs():
+    """Get email logs with optional filtering"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get query parameters
+        direction = request.args.get('direction')  # 'received' or 'sent'
+        email_type = request.args.get('type')  # 'reply', 'summary', 'test', 'other'
+        status = request.args.get('status')  # 'success' or 'error'
+        limit = int(request.args.get('limit', 100))  # Default 100 logs
+        offset = int(request.args.get('offset', 0))  # For pagination
+
+        # Build query with filters
+        query = """
+            SELECT id, direction, email_type, from_email, to_email, subject,
+                   body_preview, full_body, status, error_message, mapped_user,
+                   timestamp, created_at
+            FROM email_logs
+            WHERE 1=1
+        """
+        params = []
+
+        if direction:
+            query += " AND direction = %s"
+            params.append(direction)
+
+        if email_type:
+            query += " AND email_type = %s"
+            params.append(email_type)
+
+        if status:
+            query += " AND status = %s"
+            params.append(status)
+
+        # Order by newest first
+        query += " ORDER BY timestamp DESC"
+
+        # Add pagination
+        query += " LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        logs = cursor.fetchall()
+
+        # Get total count for pagination
+        count_query = """
+            SELECT COUNT(*) FROM email_logs WHERE 1=1
+        """
+        count_params = []
+
+        if direction:
+            count_query += " AND direction = %s"
+            count_params.append(direction)
+
+        if email_type:
+            count_query += " AND email_type = %s"
+            count_params.append(email_type)
+
+        if status:
+            count_query += " AND status = %s"
+            count_params.append(status)
+
+        cursor.execute(count_query, count_params)
+        total_count = cursor.fetchone()[0]
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'logs': [{
+                'id': log[0],
+                'direction': log[1],
+                'email_type': log[2],
+                'from_email': log[3],
+                'to_email': log[4],
+                'subject': log[5],
+                'body_preview': log[6],
+                'full_body': log[7],
+                'status': log[8],
+                'error_message': log[9],
+                'mapped_user': log[10],
+                'timestamp': log[11].isoformat() if log[11] else None,
+                'created_at': log[12].isoformat() if log[12] else None
+            } for log in logs],
+            'total': total_count,
+            'limit': limit,
+            'offset': offset
+        })
 
     except Exception as e:
         import traceback
