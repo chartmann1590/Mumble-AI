@@ -4,6 +4,8 @@ import os
 import requests
 import json
 import subprocess
+import pytz
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -13,6 +15,20 @@ DB_PORT = os.getenv('DB_PORT', '5432')
 DB_NAME = os.getenv('DB_NAME', 'mumble_ai')
 DB_USER = os.getenv('DB_USER', 'mumbleai')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'mumbleai123')
+
+# Timezone configuration
+NY_TZ = pytz.timezone('America/New_York')
+
+def format_timestamp_ny(timestamp):
+    """Convert UTC timestamp to NY time and format as ISO string"""
+    if timestamp is None:
+        return None
+    # Ensure timestamp is timezone-aware (assume UTC if naive)
+    if timestamp.tzinfo is None:
+        timestamp = pytz.utc.localize(timestamp)
+    # Convert to NY time
+    ny_time = timestamp.astimezone(NY_TZ)
+    return ny_time.isoformat()
 
 # Config storage in database
 def get_db_connection():
@@ -169,7 +185,7 @@ def get_conversations():
             'message_type': row[2],
             'role': row[3],
             'message': row[4],
-            'timestamp': row[5].isoformat()
+            'timestamp': format_timestamp_ny(row[5])
         })
 
     cursor.close()
@@ -632,7 +648,7 @@ def get_memories():
         'user_name': m[1],
         'category': m[2],
         'content': m[3],
-        'extracted_at': m[4].isoformat() if m[4] else None,
+        'extracted_at': format_timestamp_ny(m[4]) if m[4] else None,
         'importance': m[5],
         'tags': m[6] or [],
         'active': m[7]
@@ -779,7 +795,7 @@ def get_email_settings():
         'daily_summary_enabled': row[7],
         'summary_time': str(row[8]) if row[8] else '22:00:00',
         'timezone': row[9],
-        'last_sent': row[10].isoformat() if row[10] else None,
+        'last_sent': format_timestamp_ny(row[10]) if row[10] else None,
         'imap_enabled': row[11] if row[11] is not None else False,
         'imap_host': row[12],
         'imap_port': row[13] if row[13] is not None else 993,
@@ -789,7 +805,7 @@ def get_email_settings():
         'auto_reply_enabled': row[17] if row[17] is not None else False,
         'reply_signature': row[18] if row[18] else '',
         'check_interval_seconds': row[19] if row[19] is not None else 300,
-        'last_checked': row[20].isoformat() if row[20] else None
+        'last_checked': format_timestamp_ny(row[20]) if row[20] else None
     })
 
 @app.route('/api/email/settings', methods=['POST'])
@@ -1105,8 +1121,8 @@ def get_email_mappings():
                 'email_address': row[1],
                 'user_name': row[2],
                 'notes': row[3],
-                'created_at': row[4].isoformat() if row[4] else None,
-                'updated_at': row[5].isoformat() if row[5] else None
+                'created_at': format_timestamp_ny(row[4]) if row[4] else None,
+                'updated_at': format_timestamp_ny(row[5]) if row[5] else None
             })
 
         return jsonify(mappings)
@@ -1290,8 +1306,8 @@ def get_email_logs():
                 'status': log[8],
                 'error_message': log[9],
                 'mapped_user': log[10],
-                'timestamp': log[11].isoformat() if log[11] else None,
-                'created_at': log[12].isoformat() if log[12] else None
+                'timestamp': format_timestamp_ny(log[11]) if log[11] else None,
+                'created_at': format_timestamp_ny(log[12]) if log[12] else None
             } for log in logs],
             'total': total_count,
             'limit': limit,
@@ -1340,7 +1356,7 @@ def get_schedule():
         'event_time': str(e[4]) if e[4] else None,
         'description': e[5],
         'importance': e[6],
-        'created_at': e[7].isoformat() if e[7] else None,
+        'created_at': format_timestamp_ny(e[7]) if e[7] else None,
         'reminder_enabled': e[8] if len(e) > 8 else False,
         'reminder_minutes': e[9] if len(e) > 9 else 60,
         'recipient_email': e[10] if len(e) > 10 else None,
@@ -1520,7 +1536,7 @@ def get_upcoming_events():
         'event_time': str(e[4]) if e[4] else None,
         'description': e[5],
         'importance': e[6],
-        'created_at': e[7].isoformat() if e[7] else None,
+        'created_at': format_timestamp_ny(e[7]) if e[7] else None,
         'reminder_enabled': e[8] if len(e) > 8 else False,
         'reminder_minutes': e[9] if len(e) > 9 else 60,
         'recipient_email': e[10] if len(e) > 10 else None,

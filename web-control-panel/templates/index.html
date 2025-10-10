@@ -787,6 +787,37 @@
     </div>
 
     <script>
+        /**
+         * Format timestamp from ISO string to 12-hour NY time format
+         * @param {string} isoString - ISO timestamp string (already in NY time from backend)
+         * @returns {string} Formatted timestamp like "10/10/2025, 3:45 PM"
+         */
+        function formatTimestamp12Hour(isoString) {
+            if (!isoString) return 'N/A';
+            const date = new Date(isoString);
+            return date.toLocaleString('en-US', {
+                month: 'numeric',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            });
+        }
+
+        /**
+         * Format 24-hour time string to 12-hour format
+         * @param {string} time24 - Time in 24-hour format (e.g., "14:30")
+         * @returns {string} Time in 12-hour format (e.g., "2:30 PM")
+         */
+        function format12HourTime(time24) {
+            if (!time24) return '';
+            const [hours, minutes] = time24.split(':').map(Number);
+            const period = hours >= 12 ? 'PM' : 'AM';
+            const hour12 = hours % 12 || 12;
+            return `${hour12}:${minutes.toString().padStart(2, '0')} ${period}`;
+        }
+
         // Load initial data
         document.addEventListener('DOMContentLoaded', function() {
             loadStats();
@@ -838,7 +869,7 @@
                     const dateParts = event.event_date.split('-');
                     const date = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
                     const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                    const timeStr = event.event_time ? ` at ${event.event_time.substring(0, 5)}` : '';
+                    const timeStr = event.event_time ? ` at ${format12HourTime(event.event_time.substring(0, 5))}` : '';
 
                     const importance = event.importance;
                     let importanceClass = 'normal';
@@ -1334,7 +1365,7 @@
                     const msg = document.createElement('div');
                     msg.className = `message ${conv.role}`;
 
-                    const timestamp = new Date(conv.timestamp).toLocaleString();
+                    const timestamp = formatTimestamp12Hour(conv.timestamp);
 
                     msg.innerHTML = `
                         <div class="message-header">
@@ -1438,7 +1469,7 @@
                                 </span>
                                 <span style="color: #7f8c8d; font-size: 0.9em;">${mem.user_name}</span>
                                 <span style="color: #bdc3c7; font-size: 0.85em; margin-left: 10px;">
-                                    ${new Date(mem.extracted_at).toLocaleDateString()} ${new Date(mem.extracted_at).toLocaleTimeString()}
+                                    ${formatTimestamp12Hour(mem.extracted_at)}
                                 </span>
                             </div>
                             <div>
@@ -1566,14 +1597,14 @@
                 // Display timestamps
                 if (data.last_sent) {
                     document.getElementById('email-last-sent-display').style.display = 'block';
-                    document.getElementById('email-last-sent').textContent = new Date(data.last_sent).toLocaleString();
+                    document.getElementById('email-last-sent').textContent = formatTimestamp12Hour(data.last_sent);
                 } else {
                     document.getElementById('email-last-sent-display').style.display = 'none';
                 }
 
                 if (data.last_checked) {
                     document.getElementById('email-last-checked-display').style.display = 'block';
-                    document.getElementById('email-last-checked').textContent = new Date(data.last_checked).toLocaleString();
+                    document.getElementById('email-last-checked').textContent = formatTimestamp12Hour(data.last_checked);
                 } else {
                     document.getElementById('email-last-checked-display').style.display = 'none';
                 }
@@ -1837,7 +1868,7 @@
                 html += '</div>';
 
                 data.logs.forEach(log => {
-                    const timestamp = new Date(log.timestamp).toLocaleString();
+                    const timestamp = formatTimestamp12Hour(log.timestamp);
                     const directionIcon = log.direction === 'received' ? '📥' : '📤';
                     const statusColor = log.status === 'success' ? '#2ecc71' : '#e74c3c';
                     const statusIcon = log.status === 'success' ? '✓' : '✗';

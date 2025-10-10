@@ -463,6 +463,37 @@
     <div id="notification" class="notification"></div>
 
     <script>
+        /**
+         * Format timestamp from ISO string to 12-hour NY time format
+         * @param {string} isoString - ISO timestamp string (already in NY time from backend)
+         * @returns {string} Formatted timestamp like "10/10/2025, 3:45 PM"
+         */
+        function formatTimestamp12Hour(isoString) {
+            if (!isoString) return 'N/A';
+            const date = new Date(isoString);
+            return date.toLocaleString('en-US', {
+                month: 'numeric',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            });
+        }
+
+        /**
+         * Format 24-hour time string to 12-hour format
+         * @param {string} time24 - Time in 24-hour format (e.g., "14:30")
+         * @returns {string} Time in 12-hour format (e.g., "2:30 PM")
+         */
+        function format12HourTime(time24) {
+            if (!time24) return '';
+            const [hours, minutes] = time24.split(':').map(Number);
+            const period = hours >= 12 ? 'PM' : 'AM';
+            const hour12 = hours % 12 || 12;
+            return `${hour12}:${minutes.toString().padStart(2, '0')} ${period}`;
+        }
+
         let calendar;
         let currentEventId = null;
 
@@ -586,7 +617,7 @@
                         day: 'numeric',
                         year: 'numeric'
                     });
-                    const timeStr = event.event_time ? ` at ${event.event_time.substring(0, 5)}` : '';
+                    const timeStr = event.event_time ? ` at ${format12HourTime(event.event_time.substring(0, 5))}` : '';
 
                     const importance = event.importance;
                     let importanceClass = 'normal-importance';

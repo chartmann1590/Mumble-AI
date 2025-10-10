@@ -41,6 +41,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 - **Model Management**: Switch between Ollama models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
 - **History Management**: View and clear conversation history
+- **12-Hour Time Display**: All timestamps shown in user-friendly 12-hour format (e.g., 3:45 PM) in New York Eastern Time
 
 ### 🎵 TTS Voice Generator (Standalone)
 - **Independent Service**: Standalone web interface for voice generation
@@ -593,6 +594,7 @@ Download additional voices from https://github.com/rhasspy/piper and update the 
 - [Configuration](docs/CONFIGURATION.md) - Detailed configuration guide
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
 - [Deduplication System](docs/CHANGELOG_DEDUPLICATION_SYSTEM.md) - Schedule and memory duplicate prevention
+- [Timestamp Formatting](docs/CHANGELOG_TIMESTAMP_NY_TIME.md) - 12-hour NY time display throughout web panel
 
 ## Development
 
