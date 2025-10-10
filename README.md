@@ -9,7 +9,8 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 
 ### 🎙️ Voice & Text Interaction
 - **Speech-to-Text**: Real-time voice transcription using Faster Whisper
-- **Text-to-Speech**: Dual TTS engines - Piper TTS (31 voices) and Silero TTS (20+ voices)
+- **Text-to-Speech**: Triple TTS engines - Piper TTS (50+ voices), Silero TTS (20+ voices), and Chatterbox (voice cloning)
+- **Voice Cloning**: Clone any voice with 3-10 seconds of reference audio using Chatterbox TTS (WORK IN PROGRESS)
 - **Dual Communication**: Responds to voice with voice, text with text
 - **Silence Detection**: Automatically processes speech after 1.5 seconds of silence
 
@@ -219,10 +220,11 @@ From here you can:
 |---------|------|-------------|
 | Mumble Server | 48000 (external), 64738 (internal) | VoIP server |
 | Faster Whisper | 5000 | Speech-to-text API |
-| Piper TTS | 5001 | Text-to-speech API |
+| Piper TTS | 5001 | Text-to-speech API (50+ voices) |
 | Web Control Panel | 5002 | Management interface |
 | TTS Voice Generator | 5003 | Standalone voice generation web interface |
-| Silero TTS | 5004 | Alternative text-to-speech API |
+| Silero TTS | 5004 | Alternative text-to-speech API (20+ voices) |
+| Chatterbox TTS | 5005 | Voice cloning TTS API (WORK IN PROGRESS) |
 | PostgreSQL | 5432 | Database (internal) |
 | AI Bot | - | Mumble client |
 | SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
@@ -255,8 +257,9 @@ From here you can:
 Access at `http://localhost:5003`
 
 **Features**
-- **Dual TTS Engines**: Choose between Piper TTS (50+ voices) and Silero TTS (20+ voices)
+- **Triple TTS Engines**: Choose between Piper TTS (50+ voices), Silero TTS (20+ voices), and Chatterbox (voice cloning - WORK IN PROGRESS)
 - **Voice Selection**: Choose from 70+ voices across 9 languages and regions
+- **Voice Cloning**: Upload reference audio to clone any voice (Chatterbox engine - WORK IN PROGRESS)
 - **Advanced Filtering**: Filter by region, gender, and quality level
 - **Text Input**: Enter up to 5000 characters for synthesis
 - **Real-Time Preview**: Test voices with sample text before generating
@@ -265,8 +268,8 @@ Access at `http://localhost:5003`
 - **Mobile Responsive**: Works on all devices
 
 **Usage**
-1. Select a TTS engine (Piper or Silero)
-2. Select a voice from the filtered list
+1. Select a TTS engine (Piper, Silero, or Chatterbox)
+2. Select a voice from the filtered list (or upload reference audio for Chatterbox)
 3. Enter your text (up to 5000 characters)
 4. Click "Preview Voice" to test the voice
 5. Click "Generate & Download" to create the audio file
@@ -407,6 +410,13 @@ Manage events and appointments with a full calendar interface:
 - **Gender:** Balanced selection of male and female voices
 - **Style:** Professional, friendly, energetic, authoritative, and calm voice options
 
+**Chatterbox TTS (Voice Cloning - WORK IN PROGRESS):**
+- **Custom Voices:** Clone any voice with 3-10 seconds of reference audio
+- **Multi-language:** Supports 16 languages (English, Spanish, French, German, Italian, Portuguese, and more)
+- **GPU Accelerated:** CUDA support for fast synthesis (2-5 seconds) with CPU fallback
+- **High Quality:** State-of-the-art XTTS-v2 neural voice cloning
+- **Status:** Currently in development and testing phase
+
 ## Configuration
 
 ### Whisper Model Sizes
@@ -504,6 +514,13 @@ Mumble-AI/
 │   ├── app.py
 │   ├── download_models.py
 │   ├── requirements.txt
+│   └── Dockerfile
+├── chatterbox-tts-service/     # Voice cloning TTS service (WORK IN PROGRESS)
+│   ├── app.py
+│   ├── test_service.py
+│   ├── requirements.txt
+│   ├── README.md
+│   ├── QUICKSTART.md
 │   └── Dockerfile
 ├── web-control-panel/          # Management UI
 │   ├── app.py

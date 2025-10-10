@@ -5,6 +5,7 @@ import os
 import logging
 import json
 from typing import Dict, List, Optional
+from pydub import AudioSegment
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -12,7 +13,17 @@ logging.basicConfig(level=logging.INFO)
 # Configuration
 PIPER_TTS_URL = os.getenv('PIPER_TTS_URL', 'http://piper-tts:5001')
 SILERO_TTS_URL = os.getenv('SILERO_TTS_URL', 'http://silero-tts:5004')
+CHATTERBOX_TTS_URL = os.getenv('CHATTERBOX_TTS_URL', 'http://chatterbox-tts:5005')
 PORT = int(os.getenv('PORT', 5003))
+
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'postgres'),
+    'port': int(os.getenv('DB_PORT', 5432)),
+    'database': os.getenv('DB_NAME', 'mumble_ai'),
+    'user': os.getenv('DB_USER', 'mumbleai'),
+    'password': os.getenv('DB_PASSWORD', 'mumbleai123')
+}
 
 # Comprehensive voice catalog with metadata
 VOICE_CATALOG = {
@@ -175,6 +186,98 @@ SILERO_VOICE_CATALOG = {
     }
 }
 
+# Audio conversion helper
+def convert_audio_to_wav(input_path, output_path):
+    """Convert any audio format to WAV using pydub"""
+    try:
+        # Detect file format from extension
+        file_ext = os.path.splitext(input_path)[1].lower().replace('.', '')
+
+        # Load audio file (pydub auto-detects format)
+        audio = AudioSegment.from_file(input_path, format=file_ext if file_ext else None)
+
+        # Export as WAV
+        audio.export(output_path, format='wav')
+        logging.info(f"Converted {file_ext} to WAV: {output_path}")
+        return True
+    except Exception as e:
+        logging.error(f"Error converting audio to WAV: {str(e)}")
+        return False
+
+# Database helper functions
+def get_db_connection():
+    """Get database connection"""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        logging.error(f"Database connection failed: {str(e)}")
+        return None
+
+def get_cloned_voices():
+    """Get all cloned voices from database"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, description, reference_audio_path, language, created_at, tags
+            FROM chatterbox_voices
+            WHERE is_active = true
+            ORDER BY created_at DESC
+        """)
+        
+        voices = []
+        for row in cursor.fetchall():
+            voices.append({
+                'id': row[0],
+                'name': row[1],
+                'description': row[2],
+                'reference_audio': row[3],
+                'language': row[4],
+                'created_at': row[5].isoformat() if row[5] else None,
+                'tags': row[6] if row[6] else []
+            })
+        
+        cursor.close()
+        conn.close()
+        return voices
+        
+    except Exception as e:
+        logging.error(f"Error getting cloned voices: {str(e)}")
+        return []
+
+def save_cloned_voice(name, description, reference_audio_path, language='en', tags=None):
+    """Save a cloned voice to database"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO chatterbox_voices
+            (name, description, reference_audio_path, language, tags, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (name, description, reference_audio_path, language, tags, 'web-interface'))
+        
+        voice_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return voice_id
+        
+    except Exception as e:
+        logging.error(f"Error saving cloned voice: {str(e)}")
+        if conn:
+            conn.rollback()
+        return None
+
 @app.route('/')
 def index():
     """Main TTS interface page"""
@@ -187,6 +290,10 @@ def get_voices():
 
     if engine == 'silero':
         return jsonify(SILERO_VOICE_CATALOG)
+    elif engine == 'chatterbox':
+        # Return cloned voices from database - use 'voices' key for consistency with JS
+        cloned_voices = get_cloned_voices()
+        return jsonify({'voices': cloned_voices})
     else:
         return jsonify(VOICE_CATALOG)
 
@@ -214,28 +321,60 @@ def synthesize():
         if not text.strip():
             return jsonify({'error': 'Text cannot be empty'}), 400
 
-        # Validate voice exists in appropriate catalog
-        voice_found = False
-        catalog = SILERO_VOICE_CATALOG if engine == 'silero' else VOICE_CATALOG
+        # Validate voice exists (skip validation for chatterbox as they're from database)
+        if engine != 'chatterbox':
+            voice_found = False
+            catalog = SILERO_VOICE_CATALOG if engine == 'silero' else VOICE_CATALOG
 
-        for region_data in catalog.values():
-            for gender_voices in region_data['voices'].values():
-                for voice_info in gender_voices:
-                    if voice_info['id'] == voice:
-                        voice_found = True
+            for region_data in catalog.values():
+                for gender_voices in region_data['voices'].values():
+                    for voice_info in gender_voices:
+                        if voice_info['id'] == voice:
+                            voice_found = True
+                            break
+                    if voice_found:
                         break
                 if voice_found:
                     break
-            if voice_found:
-                break
 
-        if not voice_found:
-            return jsonify({'error': 'Invalid voice selected'}), 400
+            if not voice_found:
+                return jsonify({'error': 'Invalid voice selected'}), 400
 
         logging.info(f"Generating TTS with {engine} for voice: {voice}, text: {text[:50]}...")
 
         # Route to appropriate TTS service
-        if engine == 'silero':
+        if engine == 'chatterbox':
+            # For Chatterbox, need to get reference audio path from database
+            conn = get_db_connection()
+            if not conn:
+                return jsonify({'error': 'Database connection failed'}), 500
+            
+            cursor = conn.cursor()
+            cursor.execute("SELECT reference_audio_path, language FROM chatterbox_voices WHERE id = %s", (voice,))
+            result = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            
+            if not result:
+                return jsonify({'error': 'Voice not found'}), 404
+            
+            reference_audio, lang = result
+            
+            # Call Chatterbox TTS service
+            payload = {
+                "text": text,
+                "speaker_wav": reference_audio,
+                "language": lang,
+                "speed": 1.0
+            }
+            logging.info(f"Sending payload to Chatterbox: {payload}")
+
+            tts_response = requests.post(
+                f"{CHATTERBOX_TTS_URL}/api/tts",
+                json=payload,
+                timeout=300  # Voice cloning takes longer, especially on CPU
+            )
+        elif engine == 'silero':
             # Call Silero TTS service
             payload = {"text": text, "voice": voice}
             logging.info(f"Sending payload to Silero: {payload}")
@@ -365,6 +504,192 @@ def synthesize_preview(text, voice):
                 os.unlink(tmp_path)
             except:
                 pass
+
+@app.route('/api/chatterbox/clone', methods=['POST'])
+def clone_voice():
+    """Clone a voice using reference audio"""
+    try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
+        
+        text = request.form.get('text', 'Hello! This is a preview of the cloned voice.')
+        language = request.form.get('language', 'en')
+        audio_file = request.files['audio']
+        
+        if audio_file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Save audio file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(audio_file.filename)[1]) as tmp_file:
+            audio_file.save(tmp_file.name)
+            tmp_original_path = tmp_file.name
+
+        # Convert to WAV if not already WAV
+        tmp_audio_path = tmp_original_path
+        if not tmp_original_path.lower().endswith('.wav'):
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_wav:
+                tmp_audio_path = tmp_wav.name
+            if not convert_audio_to_wav(tmp_original_path, tmp_audio_path):
+                os.unlink(tmp_original_path)
+                return jsonify({'error': 'Failed to convert audio to WAV format'}), 500
+            os.unlink(tmp_original_path)  # Clean up original
+
+        try:
+            # Read the audio file and encode as base64
+            import base64
+            with open(tmp_audio_path, 'rb') as audio_file:
+                audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
+
+            # Test the voice cloning with Chatterbox
+            payload = {
+                "text": text,
+                "speaker_wav": f"data:audio/wav;base64,{audio_base64}",
+                "language": language,
+                "speed": 1.0
+            }
+
+            logging.info(f"Sending voice cloning request to Chatterbox (audio size: {len(audio_base64)} bytes base64)")
+
+            tts_response = requests.post(
+                f"{CHATTERBOX_TTS_URL}/api/tts",
+                json=payload,
+                timeout=300  # Voice cloning with XTTS-v2 can take several minutes
+            )
+            
+            if tts_response.status_code != 200:
+                return jsonify({'error': 'Voice cloning failed', 'details': tts_response.text}), 500
+            
+            # Create temporary file for the audio
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_output:
+                tmp_output.write(tts_response.content)
+                tmp_output_path = tmp_output.name
+            
+            # Return the cloned audio
+            return send_file(
+                tmp_output_path,
+                mimetype='audio/wav',
+                as_attachment=True,
+                download_name='cloned_voice_preview.wav'
+            )
+            
+        finally:
+            # Clean up temp files
+            if os.path.exists(tmp_audio_path):
+                os.unlink(tmp_audio_path)
+            if 'tmp_output_path' in locals() and os.path.exists(tmp_output_path):
+                try:
+                    os.unlink(tmp_output_path)
+                except:
+                    pass
+                    
+    except Exception as e:
+        logging.error(f"Voice cloning error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/chatterbox/save', methods=['POST'])
+def save_voice():
+    """Save a cloned voice to the library"""
+    try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
+
+        name = request.form.get('name')
+        description = request.form.get('description', '')
+        language = request.form.get('language', 'en')
+
+        # Parse tags - can be JSON string or list
+        tags_input = request.form.get('tags', '[]')
+        try:
+            tags = json.loads(tags_input) if isinstance(tags_input, str) else tags_input
+        except json.JSONDecodeError:
+            # If not valid JSON, treat as comma-separated string
+            tags = [t.strip() for t in tags_input.split(',') if t.strip()]
+
+        if not name:
+            return jsonify({'error': 'Voice name is required'}), 400
+
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        # Save audio file to permanent storage
+        upload_dir = '/app/cloned_voices'
+        os.makedirs(upload_dir, exist_ok=True)
+
+        # Generate unique filename (always .wav)
+        import hashlib
+        import time
+        filename = f"{hashlib.md5(name.encode()).hexdigest()}_{int(time.time())}.wav"
+        audio_path = os.path.join(upload_dir, filename)
+
+        # Save to temp first, then convert if needed
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(audio_file.filename)[1]) as tmp_file:
+            audio_file.save(tmp_file.name)
+            tmp_audio_path = tmp_file.name
+
+        # Convert to WAV if not already WAV
+        if not tmp_audio_path.lower().endswith('.wav'):
+            if not convert_audio_to_wav(tmp_audio_path, audio_path):
+                os.unlink(tmp_audio_path)
+                return jsonify({'error': 'Failed to convert audio to WAV format'}), 500
+            os.unlink(tmp_audio_path)
+        else:
+            # Just move the file if it's already WAV
+            import shutil
+            shutil.move(tmp_audio_path, audio_path)
+
+        # Save to database
+        voice_id = save_cloned_voice(name, description, audio_path, language, tags)
+
+        if voice_id:
+            return jsonify({
+                'success': True,
+                'voice_id': voice_id,
+                'message': 'Voice saved successfully'
+            }), 200
+        else:
+            return jsonify({'error': 'Failed to save voice to database'}), 500
+
+    except Exception as e:
+        logging.error(f"Save voice error: {str(e)}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/chatterbox/voices', methods=['GET'])
+def get_chatterbox_voices():
+    """Get all cloned voices"""
+    try:
+        voices = get_cloned_voices()
+        return jsonify({'voices': voices}), 200
+    except Exception as e:
+        logging.error(f"Get voices error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/chatterbox/voices/<int:voice_id>', methods=['DELETE'])
+def delete_voice(voice_id):
+    """Delete a cloned voice"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor()
+        # Soft delete by setting is_active to false
+        cursor.execute("""
+            UPDATE chatterbox_voices 
+            SET is_active = false 
+            WHERE id = %s
+        """, (voice_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Voice deleted successfully'}), 200
+        
+    except Exception as e:
+        logging.error(f"Delete voice error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health():

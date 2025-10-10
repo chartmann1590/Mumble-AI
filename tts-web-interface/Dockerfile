@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -17,7 +18,7 @@ COPY app/templates/ ./templates/
 COPY app/static/ ./static/
 
 # Create necessary directories
-RUN mkdir -p /app/temp
+RUN mkdir -p /app/temp /app/cloned_voices
 
 # Expose port
 EXPOSE 5003

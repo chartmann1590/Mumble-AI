@@ -88,6 +88,39 @@ services:
               count: 1
               capabilities: [gpu]
 
+  chatterbox-tts:
+    build:
+      context: ./chatterbox-tts-service
+      dockerfile: Dockerfile
+    container_name: chatterbox-tts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5005:5005"
+    environment:
+      - PORT=5005
+      - DEVICE=auto
+      - TTS_MODEL=tts_models/multilingual/multi-dataset/xtts_v2
+      - MODEL_DIR=/app/models
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+    volumes:
+      - chatterbox-models:/app/models
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   postgres:
     image: postgres:16-alpine
     container_name: mumble-ai-postgres
@@ -153,6 +186,7 @@ services:
       - WHISPER_URL=http://faster-whisper:5000
       - PIPER_URL=http://piper-tts:5001
       - SILERO_URL=http://silero-tts:5004
+      - CHATTERBOX_URL=http://chatterbox-tts:5005
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama2}
       - DB_HOST=postgres
@@ -210,6 +244,7 @@ services:
       - WHISPER_URL=http://faster-whisper:5000
       - PIPER_URL=http://piper-tts:5001
       - SILERO_URL=http://silero-tts:5004
+      - CHATTERBOX_URL=http://chatterbox-tts:5005
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${POSTGRES_DB:-mumble_ai}
@@ -260,15 +295,27 @@ services:
       dockerfile: Dockerfile
     container_name: tts-web-interface
     depends_on:
+      postgres:
+        condition: service_healthy
       piper-tts:
         condition: service_started
       silero-tts:
+        condition: service_started
+      chatterbox-tts:
         condition: service_started
     ports:
       - "5003:5003"
     environment:
       - PIPER_TTS_URL=http://piper-tts:5001
       - SILERO_TTS_URL=http://silero-tts:5004
+      - CHATTERBOX_TTS_URL=http://chatterbox-tts:5005
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+    volumes:
+      - cloned-voices:/app/cloned_voices
     restart: unless-stopped
     networks:
       - mumble-ai-network
@@ -304,3 +351,5 @@ volumes:
   postgres-data:
   piper-voices:
   silero-models:
+  chatterbox-models:
+  cloned-voices:

@@ -58,6 +58,80 @@
                                 <small>High-quality neural voices with GPU acceleration</small>
                             </span>
                         </label>
+                        <label class="engine-option">
+                            <input type="radio" name="engine" value="chatterbox">
+                            <span class="engine-label">
+                                <i class="fas fa-clone"></i> Chatterbox TTS
+                                <small>AI voice cloning - Clone any voice!</small>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Voice Cloning Section (Chatterbox) -->
+            <section class="voice-cloning-section" id="voice-cloning-section" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-magic"></i> Voice Cloning</h2>
+                    <p class="section-desc">Upload a 3-10 second audio sample to clone a voice</p>
+                </div>
+
+                <div class="cloning-container">
+                    <div class="upload-section">
+                        <div class="file-upload-box">
+                            <input type="file" id="clone-audio-file" accept="audio/wav,audio/mp3,audio/mpeg,audio/m4a,audio/x-m4a,audio/*" style="display: none;">
+                            <label for="clone-audio-file" class="file-upload-label">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                                <span>Drop audio file here or click to upload</span>
+                                <small>WAV, MP3, M4A, or other audio formats (3-10 seconds recommended)</small>
+                            </label>
+                            <div id="file-info" class="file-info" style="display: none;">
+                                <i class="fas fa-file-audio"></i>
+                                <span id="file-name"></span>
+                                <button id="remove-file" class="btn-icon"><i class="fas fa-times"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="cloning-controls">
+                            <div class="form-group">
+                                <label for="clone-language">Language</label>
+                                <select id="clone-language" class="form-control">
+                                    <option value="en">English</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="it">Italian</option>
+                                    <option value="pt">Portuguese</option>
+                                    <option value="pl">Polish</option>
+                                    <option value="tr">Turkish</option>
+                                    <option value="ru">Russian</option>
+                                    <option value="nl">Dutch</option>
+                                    <option value="cs">Czech</option>
+                                    <option value="ar">Arabic</option>
+                                    <option value="zh-cn">Chinese</option>
+                                    <option value="ja">Japanese</option>
+                                    <option value="hu">Hungarian</option>
+                                    <option value="ko">Korean</option>
+                                </select>
+                            </div>
+                            
+                            <div class="button-group">
+                                <button id="test-clone-btn" class="btn btn-secondary" disabled>
+                                    <i class="fas fa-play"></i> Test Voice
+                                </button>
+                                <button id="save-clone-btn" class="btn btn-primary" disabled>
+                                    <i class="fas fa-save"></i> Save to Library
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Voice Library -->
+                    <div class="voice-library">
+                        <h3><i class="fas fa-book"></i> Your Cloned Voices</h3>
+                        <div id="cloned-voices-grid" class="voice-grid">
+                            <!-- Cloned voices will be loaded here -->
+                        </div>
                     </div>
                 </div>
             </section>
@@ -122,15 +196,43 @@
 
         <!-- Footer -->
         <footer class="footer">
-            <p>&copy; 2024 TTS Voice Generator. Powered by Piper TTS & Silero TTS.</p>
+            <p>&copy; 2024 TTS Voice Generator. Powered by Piper TTS, Silero TTS & Chatterbox TTS.</p>
         </footer>
+    </div>
+
+    <!-- Save Voice Modal -->
+    <div class="modal" id="save-voice-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-save"></i> Save Cloned Voice</h3>
+                <button class="modal-close" id="close-modal"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="voice-name">Voice Name *</label>
+                    <input type="text" id="voice-name" class="form-control" placeholder="e.g., John Smith Voice" required>
+                </div>
+                <div class="form-group">
+                    <label for="voice-description">Description (Optional)</label>
+                    <textarea id="voice-description" class="form-control" rows="3" placeholder="Brief description of the voice..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="voice-tags">Tags (Optional)</label>
+                    <input type="text" id="voice-tags" class="form-control" placeholder="e.g., male, deep, professional (comma-separated)">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-save" class="btn btn-secondary">Cancel</button>
+                <button id="confirm-save" class="btn btn-primary">Save Voice</button>
+            </div>
+        </div>
     </div>
 
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loading-overlay">
         <div class="loading-spinner">
             <i class="fas fa-spinner fa-spin"></i>
-            <p>Generating audio...</p>
+            <p id="loading-message">Generating audio...</p>
         </div>
     </div>
 

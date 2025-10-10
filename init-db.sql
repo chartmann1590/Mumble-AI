@@ -232,11 +232,85 @@ CREATE INDEX IF NOT EXISTS idx_email_logs_to ON email_logs(to_email);
 CREATE INDEX IF NOT EXISTS idx_email_logs_type ON email_logs(email_type);
 CREATE INDEX IF NOT EXISTS idx_email_logs_status ON email_logs(status);
 
+-- Create schedule_events table for calendar functionality
+CREATE TABLE IF NOT EXISTS schedule_events (
+    id SERIAL PRIMARY KEY,
+    user_name VARCHAR(255) NOT NULL,
+    title VARCHAR(500) NOT NULL,
+    event_date DATE NOT NULL,
+    event_time TIME,
+    description TEXT,
+    importance INTEGER DEFAULT 5 CHECK (importance >= 1 AND importance <= 10),
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for schedule_events
+CREATE INDEX IF NOT EXISTS idx_schedule_user ON schedule_events(user_name);
+CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule_events(event_date);
+CREATE INDEX IF NOT EXISTS idx_schedule_active ON schedule_events(active);
+CREATE INDEX IF NOT EXISTS idx_schedule_importance ON schedule_events(importance DESC);
+
+-- Create update trigger for schedule_events updated_at
+CREATE OR REPLACE FUNCTION update_schedule_events_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_schedule_events_updated_at
+    BEFORE UPDATE ON schedule_events
+    FOR EACH ROW
+    EXECUTE FUNCTION update_schedule_events_updated_at();
+
+-- Create chatterbox_voices table for voice cloning presets
+CREATE TABLE IF NOT EXISTS chatterbox_voices (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    description TEXT,
+    reference_audio_path TEXT NOT NULL,
+    language VARCHAR(10) DEFAULT 'en',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(255),
+    tags TEXT[],
+    is_active BOOLEAN DEFAULT true,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Create indexes for chatterbox_voices
+CREATE INDEX IF NOT EXISTS idx_chatterbox_voices_name ON chatterbox_voices(name);
+CREATE INDEX IF NOT EXISTS idx_chatterbox_voices_language ON chatterbox_voices(language);
+CREATE INDEX IF NOT EXISTS idx_chatterbox_voices_active ON chatterbox_voices(is_active);
+CREATE INDEX IF NOT EXISTS idx_chatterbox_voices_tags ON chatterbox_voices USING GIN(tags);
+
+-- Create update trigger for chatterbox_voices updated_at
+CREATE OR REPLACE FUNCTION update_chatterbox_voices_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_chatterbox_voices_updated_at
+    BEFORE UPDATE ON chatterbox_voices
+    FOR EACH ROW
+    EXECUTE FUNCTION update_chatterbox_voices_updated_at();
+
 COMMENT ON TABLE conversation_history IS 'Stores all conversation history between users and the AI bot';
 COMMENT ON COLUMN conversation_history.message_type IS 'Type of message: voice or text';
 COMMENT ON COLUMN conversation_history.role IS 'Role: user or assistant';
 COMMENT ON TABLE bot_config IS 'Stores bot configuration settings';
 COMMENT ON TABLE persistent_memories IS 'Stores important extracted memories like schedules, facts, preferences, and tasks';
+COMMENT ON TABLE schedule_events IS 'Stores calendar events and scheduled tasks for AI scheduling system';
+COMMENT ON COLUMN schedule_events.event_time IS 'Optional time for event (NULL for all-day events)';
 COMMENT ON TABLE email_settings IS 'Stores email configuration for daily summary emails';
 COMMENT ON TABLE email_user_mappings IS 'Maps email addresses to user names for personalized bot responses';
 COMMENT ON TABLE email_logs IS 'Logs all email activity including received and sent emails';
+COMMENT ON TABLE chatterbox_voices IS 'Stores voice cloning presets for Chatterbox TTS service';
+COMMENT ON COLUMN chatterbox_voices.reference_audio_path IS 'Path to reference audio file for voice cloning';
+COMMENT ON COLUMN chatterbox_voices.metadata IS 'Additional metadata in JSON format (e.g., speaker info, recording details)';
