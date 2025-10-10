@@ -162,3 +162,8 @@ sql/backup-*.sql
 
 # SSL certificates
 mumble-web-ssl/*.pem
+
+# Playwright test artifacts
+playwright-report/
+test-results/
+tts-web-interface/tests/
