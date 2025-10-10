@@ -1906,6 +1906,14 @@
                     }
                     html += '</div>';
 
+                    // Retry button for failed emails
+                    if (log.status === 'error' && log.direction === 'sent') {
+                        html += '<div style="margin-top: 10px;">';
+                        html += `<button onclick="retryFailedEmail(${log.id})" id="retry-btn-${log.id}" style="background: #e67e22; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600;">🔄 Retry Sending</button>`;
+                        html += `<span id="retry-status-${log.id}" style="margin-left: 10px; font-size: 14px;"></span>`;
+                        html += '</div>';
+                    }
+
                     // Body preview with expand button
                     if (log.body_preview) {
                         html += '<div style="margin-top: 10px;">';
@@ -1942,6 +1950,51 @@
                 previewDiv.style.display = 'block';
                 fullBodyDiv.style.display = 'none';
                 button.textContent = 'Show Full Body';
+            }
+        }
+
+        async function retryFailedEmail(logId) {
+            const button = document.getElementById(`retry-btn-${logId}`);
+            const statusSpan = document.getElementById(`retry-status-${logId}`);
+
+            try {
+                // Disable button and show loading state
+                button.disabled = true;
+                button.style.opacity = '0.6';
+                button.style.cursor = 'not-allowed';
+                statusSpan.innerHTML = '<span style="color: #3498db;">⏳ Retrying...</span>';
+
+                const response = await fetch(`/api/email/retry/${logId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    statusSpan.innerHTML = `<span style="color: #2ecc71;">✓ ${data.message}</span>`;
+                    
+                    // Reload logs after 2 seconds to show updated status
+                    setTimeout(() => {
+                        loadEmailLogs();
+                    }, 2000);
+                } else {
+                    statusSpan.innerHTML = `<span style="color: #e74c3c;">✗ Error: ${data.error}</span>`;
+                    // Re-enable button on error
+                    button.disabled = false;
+                    button.style.opacity = '1';
+                    button.style.cursor = 'pointer';
+                }
+
+            } catch (error) {
+                console.error('Error retrying email:', error);
+                statusSpan.innerHTML = `<span style="color: #e74c3c;">✗ Failed to retry: ${error.message}</span>`;
+                // Re-enable button on error
+                button.disabled = false;
+                button.style.opacity = '1';
+                button.style.cursor = 'pointer';
             }
         }
     </script>

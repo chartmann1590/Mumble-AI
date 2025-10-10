@@ -1319,6 +1319,151 @@ def get_email_logs():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/email/retry/<int:log_id>', methods=['POST'])
+def retry_failed_email(log_id):
+    """Retry sending a failed email by triggering email-summary-service"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get the failed email log
+        cursor.execute("""
+            SELECT id, direction, email_type, from_email, to_email, subject,
+                   full_body, status, error_message, mapped_user
+            FROM email_logs
+            WHERE id = %s AND status = 'error'
+        """, (log_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            cursor.close()
+            conn.close()
+            return jsonify({'error': 'Failed email not found or already succeeded'}), 404
+
+        log_id, direction, email_type, from_email, to_email, subject, body, status, error_message, mapped_user = row
+
+        # Only allow retrying sent emails (summaries and replies)
+        if direction != 'sent':
+            cursor.close()
+            conn.close()
+            return jsonify({'error': 'Can only retry sent emails'}), 400
+
+        cursor.close()
+        conn.close()
+
+        # Check if it's an Ollama failure (needs regeneration) or SMTP failure (just resend)
+        is_ollama_failure = error_message and 'Ollama API failed' in error_message
+
+        if is_ollama_failure and email_type == 'summary':
+            # Trigger email-summary-service to regenerate and send
+            try:
+                # Delete the error log so a new one will be created
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM email_logs WHERE id = %s", (log_id,))
+                conn.commit()
+                cursor.close()
+                conn.close()
+
+                # Trigger summary generation
+                response = requests.post('http://email-summary-service:5006/api/send-summary', timeout=5)
+                
+                if response.status_code == 200:
+                    return jsonify({'success': True, 'message': 'Summary regeneration triggered. Check email logs for results.'}), 200
+                else:
+                    return jsonify({'error': 'Failed to trigger summary service'}), 500
+
+            except Exception as e:
+                return jsonify({'error': f'Failed to contact email-summary-service: {str(e)}'}), 500
+
+        elif email_type == 'reply':
+            # For reply failures, we can't easily regenerate without the original email context
+            # Mark the log for deletion and inform user to wait for next email check
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE email_logs
+                SET error_message = 'Retry requested - email will be retried on next check cycle'
+                WHERE id = %s
+            """, (log_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                'success': True, 
+                'message': 'Reply will be retried automatically on next email check cycle'
+            }), 200
+
+        else:
+            # For SMTP failures, try to resend directly
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from email.utils import formatdate
+
+            # Get email settings
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT smtp_host, smtp_port, smtp_username, smtp_password,
+                       smtp_use_tls, smtp_use_ssl, from_email
+                FROM email_settings
+                WHERE id = 1
+            """)
+
+            settings_row = cursor.fetchone()
+            if not settings_row:
+                cursor.close()
+                conn.close()
+                return jsonify({'error': 'Email settings not configured'}), 400
+
+            smtp_host, smtp_port, smtp_username, smtp_password, smtp_use_tls, smtp_use_ssl, configured_from_email = settings_row
+            cursor.close()
+            conn.close()
+
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = configured_from_email
+            msg['To'] = to_email
+            msg['Date'] = formatdate(localtime=True)
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+            # Send email
+            if smtp_use_ssl:
+                smtp = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30)
+            else:
+                smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=30)
+                if smtp_use_tls:
+                    smtp.starttls()
+
+            if smtp_username and smtp_password:
+                smtp.login(smtp_username, smtp_password)
+
+            smtp.send_message(msg)
+            smtp.quit()
+
+            # Update the log entry to success
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE email_logs
+                SET status = 'success',
+                    error_message = NULL,
+                    timestamp = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (log_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return jsonify({'success': True, 'message': 'Email sent successfully'}), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 # Schedule API
 @app.route('/api/schedule', methods=['GET'])
 def get_schedule():

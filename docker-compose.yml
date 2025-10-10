@@ -328,6 +328,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "5006:5006"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432

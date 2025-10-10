@@ -24,6 +24,8 @@ import pytz
 from typing import List, Dict, Optional, Tuple
 import re
 import threading
+from requests.exceptions import Timeout, RequestException
+from flask import Flask, jsonify, request as flask_request
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +56,76 @@ class EmailSummaryService:
         self.db_conn = None
         self.last_check_date = None
         self.connect_db()
+
+    def call_ollama_with_retry(self, prompt: str, max_retries: int = 3, timeout: int = 120) -> Optional[str]:
+        """
+        Call Ollama API with retry logic.
+        
+        Args:
+            prompt: The prompt to send to Ollama
+            max_retries: Maximum number of retry attempts (default: 3)
+            timeout: Timeout in seconds for each attempt (default: 120)
+            
+        Returns:
+            Generated text response or None if all retries failed
+        """
+        # Get Ollama model from database
+        conn = self.get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+                row = cursor.fetchone()
+                ollama_model = row[0] if row else 'llama3.2:latest'
+        finally:
+            conn.close()
+
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Ollama API call attempt {attempt}/{max_retries}")
+                
+                response = requests.post(
+                    f"{OLLAMA_URL}/api/generate",
+                    json={
+                        'model': ollama_model,
+                        'prompt': prompt,
+                        'stream': False,
+                        'options': {
+                            'temperature': 0.7,
+                            'num_predict': 1000
+                        }
+                    },
+                    timeout=timeout
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    generated_text = result.get('response', '').strip()
+                    logger.info(f"Ollama API call succeeded on attempt {attempt}")
+                    return generated_text
+                else:
+                    last_error = f"HTTP {response.status_code}: {response.text}"
+                    logger.warning(f"Ollama request failed on attempt {attempt}: {last_error}")
+
+            except Timeout as e:
+                last_error = f"Timeout after {timeout}s"
+                logger.warning(f"Ollama request timed out on attempt {attempt}/{max_retries}: {e}")
+            except RequestException as e:
+                last_error = f"Request error: {str(e)}"
+                logger.warning(f"Ollama request failed on attempt {attempt}/{max_retries}: {e}")
+            except Exception as e:
+                last_error = f"Unexpected error: {str(e)}"
+                logger.error(f"Unexpected error on Ollama attempt {attempt}/{max_retries}: {e}")
+
+            # Wait before retrying (exponential backoff)
+            if attempt < max_retries:
+                wait_time = 2 ** attempt  # 2, 4, 8 seconds
+                logger.info(f"Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+
+        # All retries failed
+        logger.error(f"All {max_retries} Ollama API attempts failed. Last error: {last_error}")
+        return None
 
     def connect_db(self):
         """Connect to PostgreSQL database"""
@@ -380,35 +452,15 @@ Keep it concise and friendly. Use markdown formatting:"""
 
         try:
             logger.info("Generating summary with Ollama...")
-
-            # Get Ollama model from database
-            conn = self.get_db_connection()
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
-                row = cursor.fetchone()
-                ollama_model = row[0] if row else 'llama3.2:latest'
-
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    'model': ollama_model,
-                    'prompt': summary_prompt,
-                    'stream': False,
-                    'options': {
-                        'temperature': 0.5,
-                        'num_predict': 1000
-                    }
-                },
-                timeout=120
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                summary = result.get('response', '').strip()
+            
+            # Use retry logic for Ollama call
+            summary = self.call_ollama_with_retry(summary_prompt, max_retries=3, timeout=120)
+            
+            if summary:
                 logger.info("Summary generated successfully")
                 return summary
             else:
-                logger.error(f"Ollama request failed with status {response.status_code}")
+                logger.error("Failed to generate summary after all retries")
                 return self._generate_fallback_summary(conversations)
 
         except Exception as e:
@@ -835,18 +887,36 @@ Keep it concise and friendly. Use markdown formatting:"""
         schedule_changes = self.get_schedule_changes(hours=24)
         memories = self.get_recent_memories(hours=24)
 
-        # Generate summary with all context
-        summary = self.generate_summary_with_ollama(conversations, schedule_events, schedule_changes, memories)
-
         # Format date range
         now = datetime.now(pytz.timezone(settings['timezone']))
         yesterday = now - timedelta(days=1)
         date_range = f"{yesterday.strftime('%B %d, %Y')} - {now.strftime('%B %d, %Y')}"
+        subject = f"Mumble AI Daily Summary - {now.strftime('%B %d, %Y')}"
+
+        # Generate summary with all context
+        summary = self.generate_summary_with_ollama(conversations, schedule_events, schedule_changes, memories)
+
+        # Check if summary generation failed (using fallback)
+        ollama_failed = summary.startswith("# Daily Conversation Summary")  # Fallback pattern
 
         # Create email content
-        subject = f"Mumble AI Daily Summary - {now.strftime('%B %d, %Y')}"
         html_content = self.format_html_email(summary, date_range, schedule_events, schedule_changes, memories)
         plain_content = f"Mumble AI Daily Summary\n{date_range}\n\n{summary}"
+
+        # If Ollama failed, log the failure and don't send email
+        if ollama_failed and (conversations or schedule_changes or memories):
+            logger.error("Ollama failed after all retries - not sending summary")
+            self.log_email(
+                direction='sent',
+                email_type='summary',
+                from_email=settings['from_email'],
+                to_email=settings['recipient_email'],
+                subject=subject,
+                body=plain_content,
+                status='error',
+                error_message='Ollama API failed after 3 retry attempts - summary generation timed out. Click retry to attempt again.'
+            )
+            return
 
         # Send email
         success = self.send_email(settings, subject, html_content, plain_content)
@@ -1924,24 +1994,10 @@ Generate a professional, helpful, and personalized email reply. Use the memories
 
 Your reply:"""
 
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    'model': ollama_model,
-                    'prompt': reply_prompt,
-                    'stream': False,
-                    'options': {
-                        'temperature': 0.7,
-                        'num_predict': 500
-                    }
-                },
-                timeout=120
-            )
+            # Use retry logic for Ollama call
+            reply_text = self.call_ollama_with_retry(reply_prompt, max_retries=3, timeout=120)
 
-            if response.status_code == 200:
-                result = response.json()
-                reply_text = result.get('response', '').strip()
-
+            if reply_text:
                 # Add signature if configured
                 if settings['reply_signature']:
                     reply_text += f"\n\n{settings['reply_signature']}"
@@ -1949,7 +2005,7 @@ Your reply:"""
                 logger.info("AI reply generated successfully")
                 return reply_text
             else:
-                logger.error(f"Ollama request failed with status {response.status_code}")
+                logger.error("Failed to generate AI reply after all retries")
                 return None
 
         except Exception as e:
@@ -2591,7 +2647,20 @@ Manage your schedule at http://localhost:5002/schedule
                         else:
                             logger.error(f"Failed to send reply to {sender_email}")
                     else:
-                        logger.error(f"Failed to generate reply for email from {sender_email}")
+                        logger.error(f"Failed to generate reply for email from {sender_email} - Ollama timeout")
+                        
+                        # Log failed reply attempt
+                        self.log_email(
+                            direction='sent',
+                            email_type='reply',
+                            from_email=settings['from_email'],
+                            to_email=sender_email,
+                            subject=f"Re: {subject}" if not subject.lower().startswith('re:') else subject,
+                            body=f"Failed to generate reply. Original message: {body[:500]}",
+                            status='error',
+                            error_message='Ollama API failed after 3 retry attempts - reply generation timed out. Click retry to attempt again.',
+                            mapped_user=mapped_user
+                        )
 
                 except Exception as e:
                     logger.error(f"Error processing email {email_id}: {e}", exc_info=True)
@@ -2654,6 +2723,53 @@ Manage your schedule at http://localhost:5002/schedule
             logger.info("Database connection closed")
 
 
+# Flask API for manual triggers
+app = Flask(__name__)
+email_service = None
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({'status': 'healthy', 'service': 'email-summary'}), 200
+
+@app.route('/api/send-summary', methods=['POST'])
+def api_send_summary():
+    """Manually trigger a daily summary send"""
+    try:
+        if not email_service:
+            return jsonify({'error': 'Service not initialized'}), 500
+
+        settings = email_service.get_email_settings()
+        if not settings:
+            return jsonify({'error': 'Email settings not configured'}), 400
+
+        # Send summary in background thread
+        def send_in_background():
+            try:
+                email_service.send_daily_summary(settings)
+            except Exception as e:
+                logger.error(f"Error sending manual summary: {e}")
+
+        threading.Thread(target=send_in_background, daemon=True).start()
+
+        return jsonify({'success': True, 'message': 'Summary generation started'}), 200
+
+    except Exception as e:
+        logger.error(f"Error in manual summary endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def run_service_loop():
+    """Run the email service loop in background thread"""
+    email_service.run()
+
 if __name__ == '__main__':
-    service = EmailSummaryService()
-    service.run()
+    # Initialize service
+    email_service = EmailSummaryService()
+    
+    # Start service loop in background thread
+    service_thread = threading.Thread(target=run_service_loop, daemon=True)
+    service_thread.start()
+    
+    # Run Flask API
+    logger.info("Starting Flask API on port 5006")
+    app.run(host='0.0.0.0', port=5006, debug=False)

@@ -227,6 +227,7 @@ From here you can:
 | TTS Voice Generator | 5003 | Standalone voice generation web interface |
 | Silero TTS | 5004 | Alternative text-to-speech API (20+ voices) |
 | Chatterbox TTS | 5005 | Voice cloning TTS API (WORK IN PROGRESS) |
+| Email Summary Service | 5006 | Email summary API with retry logic |
 | PostgreSQL | 5432 | Database (internal) |
 | AI Bot | - | Mumble client |
 | SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
@@ -370,6 +371,22 @@ The bot will send beautifully formatted HTML emails with:
 - **Scheduled Delivery** - Automatic sending at your chosen time (default: 10pm EST)
 
 For detailed information, see [EMAIL_SUMMARIES_GUIDE.md](./EMAIL_SUMMARIES_GUIDE.md)
+
+#### Email Retry Feature
+
+If Ollama times out while generating email summaries or replies, the system will automatically retry up to 3 times with exponential backoff. If all attempts fail:
+
+1. The failure is logged in the "📬 Email Activity Logs" section
+2. An error message is displayed with details
+3. Click the **🔄 Retry Sending** button to manually retry
+4. The system will regenerate the content and attempt to send again
+
+**Retry Behavior:**
+- **Automatic**: 3 attempts with 2s, 4s, 8s delays between retries
+- **Manual**: Click retry button in web control panel for failed emails
+- **Smart Detection**: Distinguishes between Ollama failures (regenerate content) and SMTP failures (resend existing)
+
+For detailed information, see [EMAIL_RETRY_FEATURE.md](docs/EMAIL_RETRY_FEATURE.md)
 
 ### Schedule Manager
 
