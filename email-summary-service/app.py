@@ -2061,6 +2061,426 @@ Your reply:"""
 
             return False
 
+    def get_events_needing_reminders(self) -> List[Dict]:
+        """Get schedule events that need email reminders sent"""
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                # Find events where:
+                # 1. reminder_enabled = TRUE
+                # 2. reminder_sent = FALSE
+                # 3. event is coming up in the next few hours (we'll check all and filter by time)
+                # 4. event is today or in the future
+                cursor.execute("""
+                    SELECT id, user_name, title, event_date, event_time, description, importance,
+                           reminder_enabled, reminder_minutes, recipient_email
+                    FROM schedule_events
+                    WHERE active = TRUE
+                      AND reminder_enabled = TRUE
+                      AND reminder_sent = FALSE
+                      AND event_date >= CURRENT_DATE
+                    ORDER BY event_date, event_time
+                """)
+
+                rows = cursor.fetchall()
+                
+                # Filter events that are within the reminder window
+                from zoneinfo import ZoneInfo
+                ny_tz = ZoneInfo("America/New_York")
+                now = datetime.now(ny_tz)
+                
+                events_to_remind = []
+                for row in rows:
+                    event_date = row[3]
+                    event_time = row[4]
+                    reminder_minutes = row[8] or 60
+                    
+                    # Create datetime for the event
+                    if event_time:
+                        # Event has specific time
+                        event_datetime = datetime.combine(event_date, event_time)
+                        event_datetime = event_datetime.replace(tzinfo=ny_tz)
+                    else:
+                        # All-day event, set reminder for 9 AM on event date
+                        event_datetime = datetime.combine(event_date, datetime.min.time().replace(hour=9))
+                        event_datetime = event_datetime.replace(tzinfo=ny_tz)
+                    
+                    # Calculate when to send reminder
+                    reminder_time = event_datetime - timedelta(minutes=reminder_minutes)
+                    
+                    # Check if we should send reminder now (within a 5-minute window for flexibility)
+                    time_diff = (reminder_time - now).total_seconds()
+                    
+                    # Send if we're within the window (reminder time has passed but event hasn't)
+                    if -300 <= time_diff <= 300 and now < event_datetime:  # 5-minute window
+                        events_to_remind.append({
+                            'id': row[0],
+                            'user_name': row[1],
+                            'title': row[2],
+                            'event_date': row[3],
+                            'event_time': row[4],
+                            'description': row[5],
+                            'importance': row[6],
+                            'reminder_minutes': reminder_minutes,
+                            'recipient_email': row[9]
+                        })
+                
+                logger.info(f"Found {len(events_to_remind)} events needing reminders")
+                return events_to_remind
+                
+        except Exception as e:
+            logger.error(f"Error getting events needing reminders: {e}")
+            return []
+
+    def mark_reminder_sent(self, event_id: int):
+        """Mark a reminder as sent for a schedule event"""
+        try:
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE schedule_events
+                    SET reminder_sent = TRUE, reminder_sent_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (event_id,))
+            conn.commit()
+            logger.info(f"Marked reminder as sent for event ID {event_id}")
+        except Exception as e:
+            logger.error(f"Error marking reminder as sent: {e}")
+            if conn:
+                conn.rollback()
+
+    def generate_reminder_message(self, event: Dict, settings: Dict) -> str:
+        """Generate a personalized reminder message using Ollama"""
+        try:
+            # Get bot persona
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'bot_persona'")
+                row = cursor.fetchone()
+                bot_persona = row[0] if row else "a helpful AI assistant"
+                
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+                row = cursor.fetchone()
+                ollama_model = row[0] if row else 'llama3.2:latest'
+            
+            # Format event details
+            event_date_str = event['event_date'].strftime('%A, %B %d, %Y')
+            event_time_str = event['event_time'].strftime('%I:%M %p') if event['event_time'] else 'All day'
+            
+            # Calculate time until event
+            from zoneinfo import ZoneInfo
+            ny_tz = ZoneInfo("America/New_York")
+            now = datetime.now(ny_tz)
+            
+            if event['event_time']:
+                event_datetime = datetime.combine(event['event_date'], event['event_time'])
+                event_datetime = event_datetime.replace(tzinfo=ny_tz)
+            else:
+                event_datetime = datetime.combine(event['event_date'], datetime.min.time().replace(hour=9))
+                event_datetime = event_datetime.replace(tzinfo=ny_tz)
+            
+            time_until = event_datetime - now
+            minutes_until = int(time_until.total_seconds() / 60)
+            
+            # Create prompt for Ollama
+            prompt = f"""You are {bot_persona}.
+
+Generate a friendly, brief reminder message for an upcoming calendar event. The message should be warm, helpful, and encouraging.
+
+EVENT DETAILS:
+- Title: {event['title']}
+- Date: {event_date_str}
+- Time: {event_time_str}
+- Minutes until event: {minutes_until}
+{f"- Description: {event['description']}" if event.get('description') else ""}
+- Importance: {event['importance']}/10
+
+Generate a short, friendly reminder message (2-3 sentences max). Be conversational and supportive. Don't include formal headers or signatures.
+
+Example tone: "Hey! Just a friendly reminder that you have [event] coming up in [time]. [Optional encouraging note based on event type]."
+
+Your message:"""
+
+            response = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': prompt,
+                    'stream': False,
+                    'options': {
+                        'temperature': 0.7,
+                        'num_predict': 150
+                    }
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                message = result.get('response', '').strip()
+                logger.info("Generated reminder message with Ollama")
+                return message
+            else:
+                logger.error(f"Ollama request failed with status {response.status_code}")
+                return self._generate_fallback_reminder_message(event, minutes_until)
+
+        except Exception as e:
+            logger.error(f"Error generating reminder message with Ollama: {e}")
+            return self._generate_fallback_reminder_message(event, minutes_until)
+
+    def _generate_fallback_reminder_message(self, event: Dict, minutes_until: int) -> str:
+        """Generate a simple fallback reminder message"""
+        time_str = f"in {minutes_until} minutes" if minutes_until > 0 else "soon"
+        return f"Reminder: You have '{event['title']}' coming up {time_str}. Don't forget!"
+
+    def send_event_reminder(self, event: Dict, settings: Dict) -> bool:
+        """Send email reminder for a scheduled event"""
+        try:
+            logger.info(f"Sending reminder for event: {event['title']}")
+            
+            # Determine recipient email
+            recipient = event['recipient_email'] if event['recipient_email'] else settings['recipient_email']
+            
+            if not recipient:
+                logger.error("No recipient email configured for reminder")
+                return False
+            
+            # Generate AI message
+            ai_message = self.generate_reminder_message(event, settings)
+            
+            # Format event details
+            event_date_str = event['event_date'].strftime('%A, %B %d, %Y')
+            event_time_str = event['event_time'].strftime('%I:%M %p') if event['event_time'] else 'All day'
+            
+            # Importance badge
+            importance = event['importance']
+            if importance >= 8:
+                importance_badge = '🔴 High Priority'
+                importance_color = '#ef4444'
+            elif importance >= 5:
+                importance_badge = '🟠 Medium Priority'
+                importance_color = '#f97316'
+            else:
+                importance_badge = '🔵 Normal'
+                importance_color = '#667eea'
+            
+            # Create email subject
+            subject = f"⏰ Reminder: {event['title']}"
+            
+            # Create HTML email
+            html_content = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }}
+        .email-container {{
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }}
+        .content {{
+            padding: 30px;
+        }}
+        .ai-message {{
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            font-size: 16px;
+            line-height: 1.6;
+        }}
+        .event-card {{
+            background: #ffffff;
+            border: 2px solid {importance_color};
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+        }}
+        .event-title {{
+            font-size: 22px;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }}
+        .event-detail {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+            font-size: 16px;
+            color: #555;
+        }}
+        .event-detail-icon {{
+            font-size: 20px;
+            width: 24px;
+        }}
+        .importance-badge {{
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            background: {importance_color};
+            color: white;
+            margin-top: 10px;
+        }}
+        .description {{
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            color: #666;
+            font-style: italic;
+        }}
+        .footer {{
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            border-top: 1px solid #e9ecef;
+            color: #7f8c8d;
+            font-size: 14px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>⏰ Event Reminder</h1>
+        </div>
+        
+        <div class="content">
+            <div class="ai-message">
+                {ai_message}
+            </div>
+            
+            <div class="event-card">
+                <div class="event-title">{event['title']}</div>
+                
+                <div class="event-detail">
+                    <span class="event-detail-icon">📅</span>
+                    <span>{event_date_str}</span>
+                </div>
+                
+                <div class="event-detail">
+                    <span class="event-detail-icon">🕐</span>
+                    <span>{event_time_str}</span>
+                </div>
+                
+                <div class="event-detail">
+                    <span class="event-detail-icon">👤</span>
+                    <span>{event['user_name']}</span>
+                </div>
+                
+                <div class="importance-badge">{importance_badge}</div>
+                
+                {f'<div class="description">{event["description"]}</div>' if event.get('description') else ''}
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p><strong>This reminder was sent from Mumble AI</strong></p>
+            <p>Manage your schedule at the <a href="http://localhost:5002/schedule" style="color: #667eea; text-decoration: none;">Web Control Panel</a></p>
+        </div>
+    </div>
+</body>
+</html>
+'''
+            
+            # Create plain text version
+            plain_content = f"""
+⏰ EVENT REMINDER
+
+{ai_message}
+
+EVENT DETAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{event['title']}
+
+📅 Date: {event_date_str}
+🕐 Time: {event_time_str}
+👤 User: {event['user_name']}
+{f"📝 Description: {event['description']}" if event.get('description') else ''}
+
+Priority: {importance_badge}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This reminder was sent from Mumble AI.
+Manage your schedule at http://localhost:5002/schedule
+"""
+            
+            # Send the email
+            success = self.send_email(settings, subject, html_content, plain_content)
+            
+            if success:
+                # Mark reminder as sent
+                self.mark_reminder_sent(event['id'])
+                
+                # Log successful reminder
+                self.log_email(
+                    direction='sent',
+                    email_type='other',  # reminder type
+                    from_email=settings['from_email'],
+                    to_email=recipient,
+                    subject=subject,
+                    body=plain_content,
+                    status='success',
+                    mapped_user=event['user_name']
+                )
+                logger.info(f"Successfully sent reminder for event '{event['title']}' to {recipient}")
+                return True
+            else:
+                logger.error(f"Failed to send reminder for event '{event['title']}'")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error sending event reminder: {e}", exc_info=True)
+            return False
+
+    def check_and_send_reminders(self, settings: Dict):
+        """Check for events needing reminders and send them"""
+        if not settings['daily_summary_enabled']:
+            # Email system is disabled
+            return
+        
+        logger.info("Checking for events needing reminders...")
+        events = self.get_events_needing_reminders()
+        
+        if not events:
+            logger.debug("No events need reminders at this time")
+            return
+        
+        logger.info(f"Sending {len(events)} event reminder(s)")
+        for event in events:
+            try:
+                self.send_event_reminder(event, settings)
+            except Exception as e:
+                logger.error(f"Error sending reminder for event {event['id']}: {e}")
+
     def check_and_reply_to_emails(self, settings: Dict):
         """Check for new emails and send AI-generated replies"""
         if not settings['imap_enabled']:
@@ -2204,6 +2624,9 @@ Your reply:"""
                     # Check if we should send daily summary
                     if self.should_send_summary(settings):
                         self.send_daily_summary(settings)
+                    
+                    # Check for events needing reminders and send them
+                    self.check_and_send_reminders(settings)
 
                     # Check for incoming emails and send AI replies
                     if settings['imap_enabled'] and settings['auto_reply_enabled']:

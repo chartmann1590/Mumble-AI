@@ -33,6 +33,7 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics, conversation monitoring, and upcoming events display
 - **Schedule Manager**: Full calendar interface for managing events with importance levels and color-coding
+- **Email Reminders**: AI-generated email notifications for scheduled events (15, 30, or 60 minutes before)
 - **Upcoming Events**: Dashboard widget showing next 7 days, list view showing next 30 days
 - **Memory Management**: View, filter, and manage persistent memories by user and category
 - **Email Summaries**: Beautiful HTML emails with AI summaries, schedule events, and extracted memories

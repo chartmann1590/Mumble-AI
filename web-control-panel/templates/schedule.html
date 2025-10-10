@@ -430,6 +430,27 @@
                     <label for="eventImportance">Importance (1-10):</label>
                     <input type="number" id="eventImportance" min="1" max="10" value="5" required>
                 </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                        <input type="checkbox" id="reminderEnabled" onchange="toggleReminderFields()">
+                        <span>📧 Enable Email Reminder</span>
+                    </label>
+                </div>
+                <div id="reminderFields" style="display: none;">
+                    <div class="form-group">
+                        <label for="reminderMinutes">Send Reminder:</label>
+                        <select id="reminderMinutes">
+                            <option value="15">15 minutes before</option>
+                            <option value="30">30 minutes before</option>
+                            <option value="60" selected>1 hour before</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="recipientEmail">Email Address (optional):</label>
+                        <input type="email" id="recipientEmail" placeholder="Leave blank to use default">
+                        <small style="color: #666; font-size: 0.9em;">If left blank, uses the default email from settings</small>
+                    </div>
+                </div>
                 <div class="modal-footer">
                     <button type="button" class="btn" onclick="closeModal()">Cancel</button>
                     <button type="button" class="btn btn-danger" id="deleteBtn" onclick="deleteEvent()" style="display: none;">Delete</button>
@@ -517,7 +538,10 @@
                         extendedProps: {
                             user: event.user_name,
                             description: event.description,
-                            importance: event.importance
+                            importance: event.importance,
+                            reminder_enabled: event.reminder_enabled || false,
+                            reminder_minutes: event.reminder_minutes || 60,
+                            recipient_email: event.recipient_email || ''
                         },
                         backgroundColor: getColorByImportance(event.importance)
                     };
@@ -602,12 +626,19 @@
             }
         }
 
+        function toggleReminderFields() {
+            const reminderEnabled = document.getElementById('reminderEnabled').checked;
+            document.getElementById('reminderFields').style.display = reminderEnabled ? 'block' : 'none';
+        }
+
         function openAddEventModal(dateStr = null) {
             currentEventId = null;
             document.getElementById('modalTitle').textContent = 'Add Event';
             document.getElementById('eventForm').reset();
             document.getElementById('eventId').value = '';
             document.getElementById('deleteBtn').style.display = 'none';
+            document.getElementById('reminderEnabled').checked = false;
+            document.getElementById('reminderFields').style.display = 'none';
 
             if (dateStr) {
                 document.getElementById('eventDate').value = dateStr;
@@ -636,6 +667,14 @@
 
             document.getElementById('eventDescription').value = event.extendedProps.description || '';
             document.getElementById('eventImportance').value = event.extendedProps.importance || 5;
+            
+            // Load reminder fields
+            const reminderEnabled = event.extendedProps.reminder_enabled || false;
+            document.getElementById('reminderEnabled').checked = reminderEnabled;
+            document.getElementById('reminderMinutes').value = event.extendedProps.reminder_minutes || 60;
+            document.getElementById('recipientEmail').value = event.extendedProps.recipient_email || '';
+            toggleReminderFields();
+            
             document.getElementById('deleteBtn').style.display = 'inline-block';
 
             document.getElementById('eventModal').style.display = 'block';
@@ -655,7 +694,10 @@
                 event_date: document.getElementById('eventDate').value,
                 event_time: document.getElementById('eventTime').value || null,
                 description: document.getElementById('eventDescription').value || null,
-                importance: parseInt(document.getElementById('eventImportance').value)
+                importance: parseInt(document.getElementById('eventImportance').value),
+                reminder_enabled: document.getElementById('reminderEnabled').checked,
+                reminder_minutes: parseInt(document.getElementById('reminderMinutes').value),
+                recipient_email: document.getElementById('recipientEmail').value || null
             };
 
             try {

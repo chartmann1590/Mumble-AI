@@ -1313,7 +1313,8 @@ def get_schedule():
     cursor = conn.cursor()
 
     query = """
-        SELECT id, user_name, title, event_date, event_time, description, importance, created_at
+        SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
+               reminder_enabled, reminder_minutes, recipient_email, reminder_sent
         FROM schedule_events
         WHERE active = TRUE
     """
@@ -1339,7 +1340,11 @@ def get_schedule():
         'event_time': str(e[4]) if e[4] else None,
         'description': e[5],
         'importance': e[6],
-        'created_at': e[7].isoformat() if e[7] else None
+        'created_at': e[7].isoformat() if e[7] else None,
+        'reminder_enabled': e[8] if len(e) > 8 else False,
+        'reminder_minutes': e[9] if len(e) > 9 else 60,
+        'recipient_email': e[10] if len(e) > 10 else None,
+        'reminder_sent': e[11] if len(e) > 11 else False
     } for e in events])
 
 @app.route('/api/schedule', methods=['POST'])
@@ -1351,8 +1356,9 @@ def add_schedule_event():
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance, 
+                                     reminder_enabled, reminder_minutes, recipient_email)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         data.get('user_name'),
@@ -1360,7 +1366,10 @@ def add_schedule_event():
         data.get('event_date'),
         data.get('event_time'),
         data.get('description'),
-        data.get('importance', 5)
+        data.get('importance', 5),
+        data.get('reminder_enabled', False),
+        data.get('reminder_minutes', 60),
+        data.get('recipient_email')
     ))
 
     event_id = cursor.fetchone()[0]
@@ -1405,6 +1414,18 @@ def update_schedule_event(event_id):
     if 'importance' in data:
         updates.append("importance = %s")
         params.append(data['importance'])
+
+    if 'reminder_enabled' in data:
+        updates.append("reminder_enabled = %s")
+        params.append(data['reminder_enabled'])
+
+    if 'reminder_minutes' in data:
+        updates.append("reminder_minutes = %s")
+        params.append(data['reminder_minutes'])
+
+    if 'recipient_email' in data:
+        updates.append("recipient_email = %s")
+        params.append(data['recipient_email'])
 
     if updates:
         updates.append("updated_at = CURRENT_TIMESTAMP")
@@ -1468,7 +1489,8 @@ def get_upcoming_events():
     cursor = conn.cursor()
 
     query = """
-        SELECT id, user_name, title, event_date, event_time, description, importance, created_at
+        SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
+               reminder_enabled, reminder_minutes, recipient_email, reminder_sent
         FROM schedule_events
         WHERE active = TRUE
           AND event_date >= CURRENT_DATE
@@ -1498,7 +1520,11 @@ def get_upcoming_events():
         'event_time': str(e[4]) if e[4] else None,
         'description': e[5],
         'importance': e[6],
-        'created_at': e[7].isoformat() if e[7] else None
+        'created_at': e[7].isoformat() if e[7] else None,
+        'reminder_enabled': e[8] if len(e) > 8 else False,
+        'reminder_minutes': e[9] if len(e) > 9 else 60,
+        'recipient_email': e[10] if len(e) > 10 else None,
+        'reminder_sent': e[11] if len(e) > 11 else False
     } for e in events])
 
 def init_voices():
