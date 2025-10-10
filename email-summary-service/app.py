@@ -26,6 +26,14 @@ import re
 import threading
 from requests.exceptions import Timeout, RequestException
 from flask import Flask, jsonify, request as flask_request
+import base64
+import json
+import shutil
+import tempfile
+from pathlib import Path
+from PIL import Image
+import PyPDF2
+from docx import Document
 
 # Configure logging
 logging.basicConfig(
@@ -57,7 +65,7 @@ class EmailSummaryService:
         self.last_check_date = None
         self.connect_db()
 
-    def call_ollama_with_retry(self, prompt: str, max_retries: int = 3, timeout: int = 120) -> Optional[str]:
+    def call_ollama_with_retry(self, prompt: str, max_retries: int = 3, timeout: int = 180) -> Optional[str]:
         """
         Call Ollama API with retry logic.
         
@@ -1006,32 +1014,225 @@ Keep it concise and friendly. Use markdown formatting:"""
 
     def log_email(self, direction: str, email_type: str, from_email: str, to_email: str,
                   subject: str = None, body: str = None, status: str = 'success',
-                  error_message: str = None, mapped_user: str = None):
-        """Log email activity to database"""
+                  error_message: str = None, mapped_user: str = None,
+                  attachments_count: int = 0, attachments_metadata: List[Dict] = None,
+                  thread_id: int = None) -> Optional[int]:
+        """Log email activity to database including attachment information and thread tracking"""
         try:
             conn = self.get_db_connection()
             with conn.cursor() as cursor:
                 # Create body preview (first 500 chars)
                 body_preview = body[:500] if body else None
 
+                # Convert attachments metadata to JSON
+                attachments_json = json.dumps(attachments_metadata) if attachments_metadata else None
+
                 cursor.execute("""
                     INSERT INTO email_logs (
                         direction, email_type, from_email, to_email, subject,
                         body_preview, full_body, status, error_message, mapped_user,
+                        attachments_count, attachments_metadata, thread_id,
                         timestamp, created_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
+                    RETURNING id
                 """, (
                     direction, email_type, from_email, to_email, subject,
-                    body_preview, body, status, error_message, mapped_user
+                    body_preview, body, status, error_message, mapped_user,
+                    attachments_count, attachments_json, thread_id
                 ))
+                email_log_id = cursor.fetchone()[0]
             conn.commit()
-            logger.debug(f"Logged {direction} email: {email_type} from {from_email} to {to_email}")
+            logger.debug(f"Logged {direction} email: {email_type} from {from_email} to {to_email} with {attachments_count} attachment(s) (log_id={email_log_id})")
+            return email_log_id
         except Exception as e:
             logger.error(f"Error logging email activity: {e}")
             conn.rollback()
+            return None
+
+    def normalize_subject(self, subject: str) -> str:
+        """Remove Re:, Fwd:, etc. from subject to identify thread"""
+        if not subject:
+            return ""
+        # Remove Re:, RE:, re:, Fwd:, FW:, fw:, etc. (handle multiple prefixes)
+        normalized = subject
+        while True:
+            old_normalized = normalized
+            normalized = re.sub(r'^(Re|RE|re|Fwd|FW|fw):\s*', '', normalized, flags=re.IGNORECASE)
+            normalized = normalized.strip()
+            if normalized == old_normalized:
+                break
+        return normalized
+
+    def get_or_create_thread(self, subject: str, user_email: str,
+                             mapped_user: str, message_id: str) -> Optional[int]:
+        """Get existing thread or create new one based on subject"""
+        try:
+            normalized_subject = self.normalize_subject(subject)
+            if not normalized_subject:
+                normalized_subject = "(No Subject)"
+
+            conn = self.get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    # Try to find existing thread
+                    cursor.execute("""
+                        SELECT id, message_count
+                        FROM email_threads
+                        WHERE normalized_subject = %s AND user_email = %s
+                    """, (normalized_subject, user_email))
+
+                    row = cursor.fetchone()
+                    if row:
+                        thread_id, msg_count = row
+                        # Update thread
+                        cursor.execute("""
+                            UPDATE email_threads
+                            SET last_message_id = %s,
+                                message_count = %s,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = %s
+                        """, (message_id, msg_count + 1, thread_id))
+                        conn.commit()
+                        logger.debug(f"Updated existing thread {thread_id} for subject: {normalized_subject[:50]}")
+                        return thread_id
+                    else:
+                        # Create new thread
+                        cursor.execute("""
+                            INSERT INTO email_threads
+                            (subject, normalized_subject, user_email, mapped_user,
+                             first_message_id, last_message_id, message_count)
+                            VALUES (%s, %s, %s, %s, %s, %s, 1)
+                            RETURNING id
+                        """, (subject, normalized_subject, user_email, mapped_user,
+                              message_id, message_id))
+                        thread_id = cursor.fetchone()[0]
+                        conn.commit()
+                        logger.info(f"Created new thread {thread_id} for subject: {normalized_subject[:50]}")
+                        return thread_id
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error in get_or_create_thread: {e}")
+            return None
+
+    def get_thread_history(self, thread_id: int, limit: int = 10) -> List[Dict]:
+        """Get recent conversation history for this email thread"""
+        try:
+            conn = self.get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT role, message_content, timestamp
+                        FROM email_thread_messages
+                        WHERE thread_id = %s
+                        ORDER BY timestamp DESC
+                        LIMIT %s
+                    """, (thread_id, limit))
+
+                    messages = []
+                    for row in cursor.fetchall():
+                        messages.append({
+                            'role': row[0],
+                            'message': row[1],
+                            'timestamp': row[2]
+                        })
+                    return list(reversed(messages))  # Return chronological order
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error getting thread history: {e}")
+            return []
+
+    def save_thread_message(self, thread_id: int, email_log_id: int,
+                            role: str, message: str):
+        """Save message to thread history"""
+        try:
+            conn = self.get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO email_thread_messages
+                        (thread_id, email_log_id, role, message_content)
+                        VALUES (%s, %s, %s, %s)
+                    """, (thread_id, email_log_id, role, message))
+                    conn.commit()
+                    logger.debug(f"Saved {role} message to thread {thread_id}")
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error saving thread message: {e}")
+
+    def get_thread_actions(self, thread_id: int, limit: int = 5) -> List[Dict]:
+        """Get recent actions from this thread"""
+        try:
+            conn = self.get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT action_type, action, intent, status, details,
+                               error_message, executed_at
+                        FROM email_actions
+                        WHERE thread_id = %s
+                        ORDER BY executed_at DESC
+                        LIMIT %s
+                    """, (thread_id, limit))
+
+                    actions = []
+                    for row in cursor.fetchall():
+                        actions.append({
+                            'action_type': row[0],
+                            'action': row[1],
+                            'intent': row[2],
+                            'status': row[3],
+                            'details': row[4],
+                            'error_message': row[5],
+                            'executed_at': row[6]
+                        })
+                    return list(reversed(actions))
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error getting thread actions: {e}")
+            return []
+
+    def log_action(self, thread_id: int, email_log_id: int, action_type: str,
+                   action: str, intent: str, status: str, details: dict = None,
+                   error_message: str = None):
+        """Log an action attempt (memory or schedule)"""
+        try:
+            conn = self.get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO email_actions
+                        (thread_id, email_log_id, action_type, action, intent,
+                         status, details, error_message)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (thread_id, email_log_id, action_type, action, intent,
+                          status, json.dumps(details) if details else None, error_message))
+                    conn.commit()
+                    status_icon = "✅" if status == 'success' else "❌" if status == 'failed' else "⏭️"
+                    logger.info(f"{status_icon} Logged {action_type} action: {action} - {intent[:50]}")
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error logging action: {e}")
+
+    def _calculate_content_similarity(self, content1: str, content2: str) -> float:
+        """Calculate similarity between two content strings based on word overlap"""
+        words1 = set(content1.lower().split())
+        words2 = set(content2.lower().split())
+
+        if not words1 or not words2:
+            return 0.0
+
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+
+        return len(intersection) / len(union) if union else 0.0
 
     def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None,
                               importance: int = 5, tags: List[str] = None, event_date: str = None,
@@ -1044,7 +1245,7 @@ Keep it concise and friendly. Use markdown formatting:"""
 
             # Check for duplicates based on category type
             if category == 'schedule' and event_date:
-                # For schedule memories, check user, category, event_date, and event_time
+                # For schedule memories, check exact match first
                 cursor.execute(
                     """
                     SELECT id, content, importance
@@ -1054,6 +1255,56 @@ Keep it concise and friendly. Use markdown formatting:"""
                     """,
                     (user_name, category, event_date, event_time)
                 )
+                
+                existing = cursor.fetchone()
+                
+                # If no exact match, check for similar events within ±3 days
+                if not existing:
+                    from datetime import datetime, timedelta
+                    try:
+                        target_date = datetime.strptime(event_date, '%Y-%m-%d').date()
+                        date_range_start = (target_date - timedelta(days=3)).strftime('%Y-%m-%d')
+                        date_range_end = (target_date + timedelta(days=3)).strftime('%Y-%m-%d')
+                        
+                        cursor.execute(
+                            """
+                            SELECT id, content, importance, event_date
+                            FROM persistent_memories
+                            WHERE user_name = %s AND category = %s 
+                            AND event_date BETWEEN %s AND %s
+                            AND active = TRUE
+                            """,
+                            (user_name, category, date_range_start, date_range_end)
+                        )
+                        
+                        nearby_events = cursor.fetchall()
+                        
+                        # Check for similar content using fuzzy matching
+                        for event_id, event_content, event_importance, event_date_str in nearby_events:
+                            similarity = self._calculate_content_similarity(content, event_content)
+                            if similarity > 0.6:  # >60% word overlap
+                                logger.info(f"Similar schedule event detected for {user_name}: '{content}' vs '{event_content}' (similarity: {similarity:.2f}). Skipping. Existing ID: {event_id}")
+                                cursor.close()
+                                return
+                    except Exception as e:
+                        logger.debug(f"Error in fuzzy deduplication check: {e}")
+                        # Continue with normal processing if fuzzy matching fails
+                
+                if existing:
+                    existing_id, existing_content, existing_importance = existing
+                    logger.info(f"Duplicate schedule memory detected for {user_name} on {event_date}. Skipping. Existing ID: {existing_id}")
+                    
+                    # If new importance is higher, update it
+                    if importance > existing_importance:
+                        cursor.execute(
+                            "UPDATE persistent_memories SET importance = %s WHERE id = %s",
+                            (importance, existing_id)
+                        )
+                        conn.commit()
+                        logger.info(f"Updated importance of existing memory ID {existing_id} from {existing_importance} to {importance}")
+                    
+                    cursor.close()
+                    return
             else:
                 # For non-schedule memories, check for exact content match
                 cursor.execute(
@@ -1146,17 +1397,21 @@ CRITICAL RULES:
 5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
 6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
 7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
+8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
+9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
 
-IMPORTANT: Query questions should return empty array. Examples:
+IMPORTANT: Query questions and confirmations should return empty array. Examples:
 - "What's on my schedule?" → []
 - "Tell me about my calendar" → []
 - "Do I have anything tomorrow?" → []
 - "What do I have next week?" → []
+- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
+- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
 - Use date_expression field for the raw expression
-- Use HH:MM format (24-hour) for event_time, or null if no specific time
+- Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
 - Include description in content field
 
 Format (return empty array if nothing important):
@@ -1181,7 +1436,7 @@ JSON:"""
                         'num_predict': 500   # Limit response length
                     }
                 },
-                timeout=30
+                timeout=180  # 3 minutes for regular text
             )
 
             if response.status_code == 200:
@@ -1214,6 +1469,11 @@ JSON:"""
                                 date_expression = memory.get('date_expression') or memory.get('event_date')
                                 if date_expression:
                                     event_date = self.parse_date_expression(date_expression)
+                                
+                                # Skip schedule memories with unparseable dates
+                                if event_date is None:
+                                    logger.warning(f"Skipping schedule memory with unparseable date: '{date_expression}' - {memory['content']}")
+                                    continue
 
                             self.save_persistent_memory(
                                 user_name=user_name,
@@ -1243,6 +1503,18 @@ JSON:"""
         except Exception as e:
             logger.error(f"Error extracting memory: {e}", exc_info=True)
 
+    def _normalize_null_values(self, memories: List[Dict]) -> List[Dict]:
+        """Convert string 'null' to actual None in memory objects"""
+        null_fields = ['event_time', 'event_date', 'date_expression', 'description', 'time']
+        
+        for memory in memories:
+            if isinstance(memory, dict):
+                for field in null_fields:
+                    if field in memory and memory[field] == "null":
+                        memory[field] = None
+        
+        return memories
+
     def _parse_memory_json(self, text: str) -> Optional[List[Dict]]:
         """Parse JSON from LLM response with multiple fallback strategies"""
         import json
@@ -1252,7 +1524,7 @@ JSON:"""
         try:
             parsed = json.loads(text)
             if isinstance(parsed, list):
-                return parsed
+                return self._normalize_null_values(parsed)
             logger.warning("Parsed JSON is not a list, trying extraction...")
         except json.JSONDecodeError:
             pass
@@ -1265,7 +1537,7 @@ JSON:"""
                 json_str = json_match.group()
                 parsed = json.loads(json_str)
                 if isinstance(parsed, list):
-                    return parsed
+                    return self._normalize_null_values(parsed)
         except (json.JSONDecodeError, AttributeError):
             pass
 
@@ -1290,7 +1562,7 @@ JSON:"""
 
                 parsed = json.loads(json_str)
                 if isinstance(parsed, list):
-                    return parsed
+                    return self._normalize_null_values(parsed)
         except (json.JSONDecodeError, AttributeError, ValueError):
             pass
 
@@ -1569,6 +1841,51 @@ JSON:"""
                 result_date = reference_date + timedelta(days=days_ahead)
                 return result_date.strftime('%Y-%m-%d')
 
+        # Handle multiple dates: "October 11th and October 18th" -> use first date
+        if ' and ' in date_expr or ',' in date_expr:
+            # Split on common separators
+            parts = re.split(r'\s+and\s+|,\s*', date_expr)
+            if len(parts) > 1:
+                logger.warning(f"Multiple dates detected in '{date_expr}', using first date: '{parts[0]}'")
+                # Recursively parse the first date
+                return self.parse_date_expression(parts[0].strip(), reference_date)
+
+        # Handle date ranges: "October 21-25" -> use start date
+        range_match = re.match(r'([a-z]+\s+\d{1,2})(?:st|nd|rd|th)?\s*-\s*(\d{1,2})(?:st|nd|rd|th)?', date_expr)
+        if range_match:
+            start_date_expr = range_match.group(1)
+            end_day = range_match.group(2)
+            logger.info(f"Date range detected in '{date_expr}', using start date: '{start_date_expr}'")
+            # Recursively parse the start date
+            return self.parse_date_expression(start_date_expr, reference_date)
+
+        # Handle month name + ordinal day: "October 17th", "january 3rd"
+        month_names = {
+            'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+            'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
+            'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9, 'sept': 9,
+            'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+        }
+        
+        for month_name, month_num in month_names.items():
+            # Match "October 17" or "October 17th" (with optional ordinal suffix)
+            month_pattern = rf'{month_name}\s+(\d{{1,2}})(?:st|nd|rd|th)?'
+            month_match = re.search(month_pattern, date_expr)
+            if month_match:
+                day = int(month_match.group(1))
+                year = reference_date.year
+                
+                # If the date has passed this year, assume next year
+                try:
+                    result_date = datetime(year, month_num, day, tzinfo=ny_tz)
+                    if result_date < reference_date:
+                        result_date = datetime(year + 1, month_num, day, tzinfo=ny_tz)
+                    return result_date.strftime('%Y-%m-%d')
+                except ValueError:
+                    # Invalid date (e.g., February 30)
+                    logger.warning(f"Invalid date: {month_name} {day}")
+                    continue
+
         # Try parsing common date formats
         try:
             from dateutil import parser
@@ -1663,7 +1980,7 @@ User: "What do I have next week?"
                     'stream': False,
                     'temperature': 0.1
                 },
-                timeout=30
+                timeout=180  # 3 minutes for regular text
             )
 
             if response.status_code == 200:
@@ -1728,6 +2045,736 @@ User: "What do I have next week?"
             import traceback
             traceback.print_exc()
 
+    def extract_and_save_memory_sync(self, user_message: str, user_name: str) -> List[Dict]:
+        """
+        Synchronous version of extract_and_save_memory that returns results.
+        Returns list of dicts with: {category, content, importance, saved, error}
+        """
+        results = []
+        try:
+            # Get current date for context
+            from zoneinfo import ZoneInfo
+            ny_tz = ZoneInfo("America/New_York")
+            current_datetime = datetime.now(ny_tz)
+            current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
+
+            # Get Ollama model from database
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+                row = cursor.fetchone()
+                ollama_model = row[0] if row else 'llama3.2:latest'
+
+            # Same extraction prompt as extract_and_save_memory
+            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
+
+CURRENT DATE: {current_date_str}
+
+User: "{user_message}"
+
+Categories:
+- schedule: appointments, meetings, events with dates/times
+- fact: personal information, preferences, relationships, details
+- task: things to do, reminders, action items
+- preference: likes, dislikes, habits
+- other: other important information
+
+CRITICAL RULES:
+1. ONLY extract information that is actually mentioned and important
+2. Do NOT create entries with empty content
+3. If there's nothing important to remember, return an empty array: []
+4. You MUST respond with ONLY valid JSON, nothing else
+5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
+6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
+7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
+8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
+9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
+
+IMPORTANT: Query questions and confirmations should return empty array. Examples:
+- "What's on my schedule?" → []
+- "Tell me about my calendar" → []
+- "Do I have anything tomorrow?" → []
+- "What do I have next week?" → []
+- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
+- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
+
+For SCHEDULE category memories:
+- Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
+- Use date_expression field for the raw expression
+- Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
+- Include description in content field
+
+Format (return empty array if nothing important):
+[
+  {{"category": "schedule", "content": "Haircut appointment", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
+  {{"category": "fact", "content": "Likes tea over coffee", "importance": 4}}
+]
+
+Valid categories: schedule, fact, task, preference, other
+Importance: 1-10 (1=low, 10=critical)
+
+JSON:"""
+
+            response = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': extraction_prompt,
+                    'stream': False,
+                    'options': {
+                        'temperature': 0.2,
+                        'num_predict': 500
+                    }
+                },
+                timeout=180
+            )
+
+            if response.status_code == 200:
+                result = response.json().get('response', '').strip()
+                logger.debug(f"Memory extraction (sync) raw response: {result[:200]}...")
+
+                memories = self._parse_memory_json(result)
+                if memories is not None:
+                    # Filter out empty memories
+                    valid_memories = [mem for mem in memories
+                                      if isinstance(mem, dict) and 'content' in mem
+                                      and isinstance(mem.get('content'), str) and mem.get('content').strip()]
+
+                    for memory in valid_memories:
+                        if self._validate_memory(memory):
+                            try:
+                                # Parse date expression for schedule memories
+                                event_date = None
+                                event_time = memory.get('event_time')
+
+                                if memory.get('category') == 'schedule':
+                                    date_expression = memory.get('date_expression') or memory.get('event_date')
+                                    if date_expression:
+                                        event_date = self.parse_date_expression(date_expression)
+
+                                    if event_date is None:
+                                        logger.warning(f"Skipping schedule memory with unparseable date: '{date_expression}'")
+                                        results.append({
+                                            'category': memory.get('category'),
+                                            'content': memory.get('content'),
+                                            'importance': memory.get('importance', 5),
+                                            'saved': False,
+                                            'error': f"Could not parse date: {date_expression}"
+                                        })
+                                        continue
+
+                                self.save_persistent_memory(
+                                    user_name=user_name,
+                                    category=memory.get('category', 'other'),
+                                    content=memory['content'],
+                                    session_id=None,
+                                    importance=memory.get('importance', 5),
+                                    event_date=event_date,
+                                    event_time=event_time
+                                )
+
+                                results.append({
+                                    'category': memory.get('category'),
+                                    'content': memory.get('content'),
+                                    'importance': memory.get('importance', 5),
+                                    'event_date': event_date,
+                                    'event_time': event_time,
+                                    'saved': True,
+                                    'error': None
+                                })
+                                logger.info(f"✅ Saved memory for {user_name}: [{memory.get('category')}] {memory['content']}")
+
+                            except Exception as e:
+                                logger.error(f"Error saving memory: {e}")
+                                results.append({
+                                    'category': memory.get('category'),
+                                    'content': memory.get('content'),
+                                    'importance': memory.get('importance', 5),
+                                    'saved': False,
+                                    'error': str(e)
+                                })
+
+                    if not results:
+                        logger.debug(f"No important memories found for {user_name}")
+
+        except Exception as e:
+            logger.error(f"Error in extract_and_save_memory_sync: {e}", exc_info=True)
+            results.append({
+                'category': 'error',
+                'content': 'Memory extraction failed',
+                'importance': 0,
+                'saved': False,
+                'error': str(e)
+            })
+
+        return results
+
+    def extract_and_manage_schedule_sync(self, user_message: str, user_name: str) -> List[Dict]:
+        """
+        Synchronous version of extract_and_manage_schedule that returns results.
+        Returns list of dicts with: {action, title, event_date, event_time, saved, event_id, error}
+        """
+        results = []
+        try:
+            # Get current date for context
+            from zoneinfo import ZoneInfo
+            ny_tz = ZoneInfo("America/New_York")
+            current_datetime = datetime.now(ny_tz)
+            current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
+
+            # Get Ollama model
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+                row = cursor.fetchone()
+                ollama_model = row[0] if row else 'llama3.2:latest'
+
+            extraction_prompt = f"""You are a scheduling assistant analyzing a conversation to manage calendar events.
+
+CURRENT DATE: {current_date_str}
+
+Conversation:
+User: {user_message}
+
+Analyze this conversation and determine if the user wants to:
+1. ADD a new event to their schedule
+2. UPDATE an existing event
+3. DELETE/CANCEL an event
+4. NOTHING - just asking about schedule or casual conversation
+
+If scheduling action is needed, extract:
+- Action: ADD, UPDATE, DELETE, or NOTHING
+- Event title (brief description)
+- Date expression (use these formats):
+  * Specific date: "2025-10-15" or "October 15" or "Oct 15"
+  * Relative: "tomorrow", "next Monday", "next Friday", "in 3 days"
+- Time (HH:MM format in 24-hour, or null if not specified)
+- Description (optional additional details)
+- Importance (1-10, default 5)
+- Event ID (if updating/deleting - look for "that event", "the appointment", etc.)
+
+CRITICAL INSTRUCTIONS FOR DETECTING ADD ACTIONS:
+Use action "ADD" when the user wants to:
+- Schedule/book/plan a new event ("I have a meeting tomorrow")
+- Update/add to their calendar ("update my calendar with this", "add this to my schedule")
+- Put dates on their calendar ("put this on my calendar", "add these dates")
+- Explicitly mentions dates/events they want tracked
+
+Use action "NOTHING" when the user is:
+- ONLY asking questions ("what's on my calendar?", "do I have anything?")
+- ONLY reviewing without adding ("let me check my schedule")
+- Confirming existing events without changes ("that meeting is still on")
+
+KEY PHRASES THAT MEAN ADD:
+- "update my calendar" = ADD
+- "add to my schedule" = ADD
+- "put this on my calendar" = ADD
+- "schedule this" = ADD
+- "I have [event] on [date]" = ADD
+- "add these dates" = ADD
+
+KEY PHRASES THAT MEAN NOTHING:
+- "what's on my calendar" = NOTHING
+- "show me my schedule" = NOTHING
+- "do I have anything" = NOTHING
+
+When in doubt and dates are mentioned → Use "ADD"
+When no specific dates/events mentioned → Use "NOTHING"
+
+IMPORTANT: For relative dates like "next Friday", just return "next Friday" - do NOT calculate the actual date.
+
+Respond ONLY with a JSON object (no markdown, no extra text):
+{{"action": "ADD|UPDATE|DELETE|NOTHING", "title": "...", "date_expression": "next Friday", "time": "HH:MM or null", "description": "...", "importance": 5, "event_id": null}}
+
+Examples:
+User: "I have a dentist appointment tomorrow at 3pm"
+{{"action": "ADD", "title": "Dentist appointment", "date_expression": "tomorrow", "time": "15:00", "description": null, "importance": 7, "event_id": null}}
+
+User: "Update my calendar with the team meeting on Monday at 2pm"
+{{"action": "ADD", "title": "Team meeting", "date_expression": "Monday", "time": "14:00", "description": null, "importance": 6, "event_id": null}}
+
+User: "Add this to my schedule: conference call Friday 10am"
+{{"action": "ADD", "title": "Conference call", "date_expression": "Friday", "time": "10:00", "description": null, "importance": 5, "event_id": null}}
+
+User: "What's on my schedule?"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+"""
+
+            response = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': extraction_prompt,
+                    'stream': False,
+                    'temperature': 0.1
+                },
+                timeout=180
+            )
+
+            if response.status_code == 200:
+                result_text = response.json().get('response', '').strip()
+
+                try:
+                    result = json.loads(result_text)
+                    action = result.get('action', 'NOTHING')
+
+                    if action == 'ADD':
+                        date_expression = result.get('date_expression') or result.get('date')
+                        parsed_date = self.parse_date_expression(date_expression, current_datetime)
+
+                        if not parsed_date:
+                            results.append({
+                                'action': 'ADD',
+                                'title': result.get('title', 'Untitled'),
+                                'event_date': None,
+                                'event_time': result.get('time'),
+                                'saved': False,
+                                'event_id': None,
+                                'error': f"Could not parse date: {date_expression}"
+                            })
+                        else:
+                            try:
+                                event_id = self.add_schedule_event(
+                                    user_name=user_name,
+                                    title=result.get('title', 'Untitled Event'),
+                                    event_date=parsed_date,
+                                    event_time=result.get('time'),
+                                    description=result.get('description'),
+                                    importance=result.get('importance', 5)
+                                )
+                                if event_id:
+                                    results.append({
+                                        'action': 'ADD',
+                                        'title': result.get('title'),
+                                        'event_date': parsed_date,
+                                        'event_time': result.get('time'),
+                                        'saved': True,
+                                        'event_id': event_id,
+                                        'error': None
+                                    })
+                                    logger.info(f"✅ Added schedule event {event_id} for {user_name}: {result.get('title')} on {parsed_date}")
+                                else:
+                                    results.append({
+                                        'action': 'ADD',
+                                        'title': result.get('title'),
+                                        'event_date': parsed_date,
+                                        'event_time': result.get('time'),
+                                        'saved': False,
+                                        'event_id': None,
+                                        'error': 'add_schedule_event returned None'
+                                    })
+                            except Exception as e:
+                                results.append({
+                                    'action': 'ADD',
+                                    'title': result.get('title'),
+                                    'event_date': parsed_date,
+                                    'event_time': result.get('time'),
+                                    'saved': False,
+                                    'event_id': None,
+                                    'error': str(e)
+                                })
+                                logger.error(f"Error adding schedule event: {e}")
+
+                    elif action == 'DELETE':
+                        title_search = result.get('title', '')
+                        if title_search:
+                            try:
+                                events = self.get_schedule_events(days_ahead=365)
+                                user_events = [e for e in events if e['user_name'] == user_name]
+                                deleted = False
+                                for event in user_events:
+                                    if title_search.lower() in event['title'].lower():
+                                        self.delete_schedule_event(event['id'])
+                                        results.append({
+                                            'action': 'DELETE',
+                                            'title': event['title'],
+                                            'event_date': None,
+                                            'event_time': None,
+                                            'saved': True,
+                                            'event_id': event['id'],
+                                            'error': None
+                                        })
+                                        logger.info(f"✅ Deleted schedule event {event['id']} for {user_name}")
+                                        deleted = True
+                                        break
+                                if not deleted:
+                                    results.append({
+                                        'action': 'DELETE',
+                                        'title': title_search,
+                                        'event_date': None,
+                                        'event_time': None,
+                                        'saved': False,
+                                        'event_id': None,
+                                        'error': f"No matching event found for: {title_search}"
+                                    })
+                            except Exception as e:
+                                results.append({
+                                    'action': 'DELETE',
+                                    'title': title_search,
+                                    'event_date': None,
+                                    'event_time': None,
+                                    'saved': False,
+                                    'event_id': None,
+                                    'error': str(e)
+                                })
+                                logger.error(f"Error deleting schedule event: {e}")
+
+                    elif action == 'NOTHING':
+                        logger.debug("Schedule extraction determined no action needed")
+                        # Don't add to results if action is NOTHING
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse schedule extraction result: {result_text}")
+                    results.append({
+                        'action': 'error',
+                        'title': 'Parse error',
+                        'event_date': None,
+                        'event_time': None,
+                        'saved': False,
+                        'event_id': None,
+                        'error': f"JSON parse error: {str(e)}"
+                    })
+
+        except Exception as e:
+            logger.error(f"Error in extract_and_manage_schedule_sync: {e}", exc_info=True)
+            results.append({
+                'action': 'error',
+                'title': 'Schedule extraction failed',
+                'event_date': None,
+                'event_time': None,
+                'saved': False,
+                'event_id': None,
+                'error': str(e)
+            })
+
+        return results
+
+    def extract_attachments(self, msg) -> List[Dict]:
+        """Extract attachments from email message"""
+        attachments = []
+        max_size = 10 * 1024 * 1024  # 10MB limit
+        
+        try:
+            for part in msg.walk():
+                content_disposition = str(part.get("Content-Disposition", ""))
+                
+                # Skip if not an attachment
+                if "attachment" not in content_disposition:
+                    continue
+                
+                filename = part.get_filename()
+                if not filename:
+                    continue
+                
+                # Get content type and size
+                content_type = part.get_content_type()
+                payload = part.get_payload(decode=True)
+                
+                if not payload:
+                    continue
+                
+                size = len(payload)
+                
+                # Skip if too large
+                if size > max_size:
+                    logger.warning(f"Skipping attachment {filename} - size {size} bytes exceeds {max_size} bytes limit")
+                    continue
+                
+                attachments.append({
+                    'filename': filename,
+                    'content_type': content_type,
+                    'size': size,
+                    'payload': payload
+                })
+                
+                logger.info(f"Extracted attachment: {filename} ({content_type}, {size} bytes)")
+            
+        except Exception as e:
+            logger.error(f"Error extracting attachments: {e}")
+        
+        return attachments
+
+    def save_attachment_temporarily(self, filename: str, payload: bytes) -> str:
+        """Save attachment to temporary directory"""
+        try:
+            # Create temp directory with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            temp_dir = os.path.join(tempfile.gettempdir(), f'mumble-attachments/{timestamp}')
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Sanitize filename
+            safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '.', '_', '-')).strip()
+            if not safe_filename:
+                safe_filename = f"attachment_{timestamp}"
+            
+            filepath = os.path.join(temp_dir, safe_filename)
+            
+            # Save file
+            with open(filepath, 'wb') as f:
+                f.write(payload)
+            
+            logger.debug(f"Saved attachment to: {filepath}")
+            return filepath
+            
+        except Exception as e:
+            logger.error(f"Error saving attachment {filename}: {e}")
+            raise
+
+    def call_ollama_vision(self, image_base64: str, prompt: str, max_retries: int = 3, timeout: int = 600) -> Optional[str]:
+        """Call Ollama vision model with retry logic"""
+        try:
+            # Get vision model from database
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_vision_model'")
+                row = cursor.fetchone()
+                vision_model = row[0] if row else 'moondream:latest'
+            
+            last_error = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    logger.info(f"Ollama Vision API call attempt {attempt}/{max_retries} using model {vision_model}")
+                    
+                    response = requests.post(
+                        f"{OLLAMA_URL}/api/generate",
+                        json={
+                            'model': vision_model,
+                            'prompt': prompt,
+                            'images': [image_base64],
+                            'stream': False,
+                            'options': {
+                                'temperature': 0.7,
+                                'num_predict': 500
+                            }
+                        },
+                        timeout=timeout
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        generated_text = result.get('response', '').strip()
+                        logger.info(f"Ollama Vision API call succeeded on attempt {attempt}")
+                        return generated_text
+                    else:
+                        last_error = f"HTTP {response.status_code}: {response.text}"
+                        logger.warning(f"Ollama Vision request failed on attempt {attempt}: {last_error}")
+                
+                except Timeout as e:
+                    last_error = f"Timeout after {timeout}s"
+                    logger.warning(f"Ollama Vision request timed out on attempt {attempt}/{max_retries}: {e}")
+                except RequestException as e:
+                    last_error = f"Request error: {str(e)}"
+                    logger.warning(f"Ollama Vision request failed on attempt {attempt}/{max_retries}: {e}")
+                except Exception as e:
+                    last_error = f"Unexpected error: {str(e)}"
+                    logger.error(f"Unexpected error on Ollama Vision attempt {attempt}/{max_retries}: {e}")
+                
+                # Wait before retrying (exponential backoff)
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    logger.info(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+            
+            # All retries failed
+            logger.error(f"All {max_retries} Ollama Vision API attempts failed. Last error: {last_error}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in call_ollama_vision: {e}")
+            return None
+
+    def process_image_attachment(self, filepath: str, filename: str) -> Dict:
+        """Process image attachment using vision model"""
+        try:
+            # Open and resize image if needed
+            img = Image.open(filepath)
+            
+            # Convert to RGB if necessary
+            if img.mode not in ('RGB', 'L'):
+                img = img.convert('RGB')
+            
+            # Resize if too large (max width 800px)
+            max_width = 800
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_height = int(img.height * ratio)
+                img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+                logger.debug(f"Resized image to {max_width}x{new_height}")
+            
+            # Convert to base64
+            import io
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            image_bytes = buffer.getvalue()
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Get file size
+            size = os.path.getsize(filepath)
+            
+            # Call vision model
+            prompt = "Describe this image in detail. What do you see? Include any text, objects, people, colors, and other notable features."
+            analysis_text = self.call_ollama_vision(image_base64, prompt)
+            
+            if not analysis_text:
+                analysis_text = "Unable to analyze image - vision model unavailable"
+            
+            return {
+                'type': 'image',
+                'filename': filename,
+                'size': size,
+                'filepath': filepath,
+                'analysis_text': analysis_text
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing image {filename}: {e}")
+            return {
+                'type': 'image',
+                'filename': filename,
+                'size': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                'filepath': filepath,
+                'analysis_text': f"Error processing image: {str(e)}"
+            }
+
+    def extract_text_from_pdf(self, filepath: str, filename: str) -> Dict:
+        """Extract text from PDF file"""
+        try:
+            reader = PyPDF2.PdfReader(filepath)
+            page_count = len(reader.pages)
+            
+            # Extract text from all pages
+            text_parts = []
+            for page_num, page in enumerate(reader.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(f"--- Page {page_num + 1} ---\n{page_text}")
+            
+            extracted_text = "\n\n".join(text_parts)
+            
+            # Limit to first 5000 chars if too long
+            if len(extracted_text) > 5000:
+                extracted_text = extracted_text[:5000] + "\n\n[Text truncated - document is longer]"
+            
+            size = os.path.getsize(filepath)
+            
+            logger.info(f"Extracted {len(extracted_text)} characters from PDF with {page_count} pages")
+            
+            return {
+                'type': 'pdf',
+                'filename': filename,
+                'size': size,
+                'filepath': filepath,
+                'extracted_text': extracted_text,
+                'page_count': page_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF {filename}: {e}")
+            return {
+                'type': 'pdf',
+                'filename': filename,
+                'size': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                'filepath': filepath,
+                'extracted_text': f"Error reading PDF: {str(e)}",
+                'page_count': 0
+            }
+
+    def extract_text_from_docx(self, filepath: str, filename: str) -> Dict:
+        """Extract text from Word document"""
+        try:
+            doc = Document(filepath)
+            
+            # Extract all paragraphs
+            paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
+            extracted_text = "\n\n".join(paragraphs)
+            
+            # Limit to first 5000 chars if too long
+            if len(extracted_text) > 5000:
+                extracted_text = extracted_text[:5000] + "\n\n[Text truncated - document is longer]"
+            
+            size = os.path.getsize(filepath)
+            
+            logger.info(f"Extracted {len(extracted_text)} characters from DOCX with {len(paragraphs)} paragraphs")
+            
+            return {
+                'type': 'docx',
+                'filename': filename,
+                'size': size,
+                'filepath': filepath,
+                'extracted_text': extracted_text
+            }
+            
+        except Exception as e:
+            logger.error(f"Error extracting text from DOCX {filename}: {e}")
+            return {
+                'type': 'docx',
+                'filename': filename,
+                'size': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                'filepath': filepath,
+                'extracted_text': f"Error reading Word document: {str(e)}"
+            }
+
+    def process_attachments(self, attachments_data: List[Dict], user_question: str) -> List[Dict]:
+        """Process all attachments (images, PDFs, Word docs)"""
+        processed = []
+        
+        for attachment in attachments_data:
+            filename = attachment['filename']
+            content_type = attachment['content_type']
+            payload = attachment['payload']
+            
+            try:
+                # Save attachment temporarily
+                filepath = self.save_attachment_temporarily(filename, payload)
+                
+                # Process based on type
+                if content_type.startswith('image/'):
+                    # Image file - use vision model
+                    result = self.process_image_attachment(filepath, filename)
+                    processed.append(result)
+                    
+                elif content_type == 'application/pdf' or filename.lower().endswith('.pdf'):
+                    # PDF file - extract text
+                    result = self.extract_text_from_pdf(filepath, filename)
+                    processed.append(result)
+                    
+                elif content_type in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
+                                      'application/msword'] or filename.lower().endswith(('.docx', '.doc')):
+                    # Word document - extract text
+                    result = self.extract_text_from_docx(filepath, filename)
+                    processed.append(result)
+                    
+                else:
+                    logger.warning(f"Unsupported attachment type: {content_type} for {filename}")
+                    processed.append({
+                        'type': 'unsupported',
+                        'filename': filename,
+                        'size': attachment['size'],
+                        'filepath': filepath,
+                        'analysis_text': f"Unsupported file type: {content_type}"
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error processing attachment {filename}: {e}")
+                processed.append({
+                    'type': 'error',
+                    'filename': filename,
+                    'size': attachment['size'],
+                    'filepath': '',
+                    'analysis_text': f"Error processing attachment: {str(e)}"
+                })
+        
+        return processed
+
+    def cleanup_attachments(self, temp_dir: str):
+        """Delete temporary attachment directory"""
+        try:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temporary attachments directory: {temp_dir}")
+        except Exception as e:
+            logger.error(f"Error cleaning up temporary directory {temp_dir}: {e}")
+
     def connect_imap(self, settings: Dict):
         """Connect to IMAP server"""
         try:
@@ -1743,8 +2790,8 @@ User: "What do I have next week?"
             logger.error(f"Failed to connect to IMAP server: {e}")
             return None
 
-    def get_email_body(self, msg) -> Tuple[str, str]:
-        """Extract plain text and HTML body from email message"""
+    def get_email_body(self, msg) -> Tuple[str, str, List[Dict]]:
+        """Extract plain text, HTML body, and attachments from email message"""
         plain_text = ""
         html_text = ""
 
@@ -1753,7 +2800,7 @@ User: "What do I have next week?"
                 content_type = part.get_content_type()
                 content_disposition = str(part.get("Content-Disposition", ""))
 
-                # Skip attachments
+                # Skip attachments for body extraction (we'll get them separately)
                 if "attachment" in content_disposition:
                     continue
 
@@ -1782,7 +2829,11 @@ User: "What do I have next week?"
 
         # Prefer plain text, fall back to HTML (strip tags)
         body = plain_text if plain_text else self.strip_html_tags(html_text)
-        return body.strip(), html_text.strip()
+        
+        # Extract attachments
+        attachments = self.extract_attachments(msg)
+        
+        return body.strip(), html_text.strip(), attachments
 
     def strip_html_tags(self, html: str) -> str:
         """Remove HTML tags from text"""
@@ -1901,10 +2952,11 @@ User: "What do I have next week?"
             logger.error(f"Error getting schedule: {e}")
             return []
 
-    def generate_ai_reply(self, sender: str, subject: str, body: str, settings: Dict) -> str:
-        """Generate AI reply to email using Ollama with full context (memories, schedule, persona)"""
+    def generate_ai_reply(self, sender: str, subject: str, body: str, settings: Dict,
+                          thread_id: int = None, attachments_analysis: List[Dict] = None) -> str:
+        """Generate AI reply to email using Ollama with full context (thread history, memories, schedule, persona, attachments)"""
         try:
-            logger.info(f"Generating AI reply for email from {sender}")
+            logger.info(f"Generating AI reply for email from {sender} (thread_id={thread_id})")
 
             # Look up user mapping from email address
             mapped_user = self.get_user_from_email(sender)
@@ -1927,6 +2979,72 @@ User: "What do I have next week?"
             # Get memories and schedule for context (user-specific if mapped)
             memories = self.get_user_memories(mapped_user, limit=10)
             schedule_events = self.get_upcoming_schedule(mapped_user, days_ahead=30)
+
+            # NEW: Get thread conversation history
+            thread_context = ""
+            if thread_id:
+                thread_history = self.get_thread_history(thread_id, limit=10)
+                if thread_history:
+                    thread_context = "\n📧 PREVIOUS MESSAGES IN THIS EMAIL THREAD:\n"
+                    for msg in thread_history:
+                        role_label = "You (AI Assistant)" if msg['role'] == 'assistant' else (mapped_user or sender)
+                        # Truncate long messages
+                        message_preview = msg['message'][:300] + "..." if len(msg['message']) > 300 else msg['message']
+                        thread_context += f"{role_label}: {message_preview}\n"
+                    thread_context += "\n"
+
+            # NEW: Get recent actions from this thread
+            actions_context = ""
+            if thread_id:
+                recent_actions = self.get_thread_actions(thread_id, limit=5)
+                if recent_actions:
+                    # Count successes and failures
+                    memory_successes = sum(1 for a in recent_actions if a['action_type'] == 'memory' and a['status'] == 'success')
+                    schedule_successes = sum(1 for a in recent_actions if a['action_type'] == 'schedule' and a['status'] == 'success')
+                    memory_failures = sum(1 for a in recent_actions if a['action_type'] == 'memory' and a['status'] == 'failed')
+                    schedule_failures = sum(1 for a in recent_actions if a['action_type'] == 'schedule' and a['status'] == 'failed')
+
+                    # Clear summary at top
+                    actions_context = "\n" + "="*80 + "\n"
+                    actions_context += "📊 ACTION SUMMARY FOR THIS EMAIL:\n"
+                    actions_context += f"   ✅ Successfully saved {memory_successes} memories\n"
+                    actions_context += f"   ✅ Successfully added {schedule_successes} calendar events\n"
+                    if memory_failures > 0:
+                        actions_context += f"   ❌ Failed to save {memory_failures} memories (see errors below)\n"
+                    if schedule_failures > 0:
+                        actions_context += f"   ❌ Failed to add {schedule_failures} calendar events (see errors below)\n"
+                    actions_context += "="*80 + "\n\n"
+
+                    actions_context += "🔧 DETAILED ACTION LOG:\n"
+                    for action in recent_actions:
+                        status_icon = "✅" if action['status'] == 'success' else "❌"
+                        action_desc = f"{action['action_type'].upper()}"
+                        if action['action'] != 'add':
+                            action_desc += f" ({action['action']})"
+                        actions_context += f"{status_icon} {action_desc}: {action['intent']}\n"
+                        if action['status'] == 'failed' and action['error_message']:
+                            actions_context += f"   ⚠️ Error: {action['error_message']}\n"
+                        elif action['status'] == 'success' and action['action_type'] == 'schedule':
+                            # Show event ID for successfully created events
+                            details = action.get('details')
+                            if details:
+                                try:
+                                    details_dict = json.loads(details) if isinstance(details, str) else details
+                                    if details_dict.get('event_id'):
+                                        actions_context += f"   📅 Event ID: {details_dict['event_id']}\n"
+                                    if details_dict.get('event_date'):
+                                        actions_context += f"   📅 Date: {details_dict['event_date']}"
+                                        if details_dict.get('event_time'):
+                                            actions_context += f" at {details_dict['event_time']}"
+                                        actions_context += "\n"
+                                except:
+                                    pass
+                    actions_context += "\n"
+                else:
+                    # No actions attempted yet
+                    actions_context = "\n" + "="*80 + "\n"
+                    actions_context += "📊 ACTION SUMMARY: No calendar/memory actions taken yet in this email.\n"
+                    actions_context += "="*80 + "\n\n"
 
             # Build context sections
             current_datetime = datetime.now(pytz.timezone(settings.get('timezone', 'America/New_York')))
@@ -1956,46 +3074,77 @@ User: "What do I have next week?"
             else:
                 schedule_context = f"\n📅 SCHEDULE: No upcoming events scheduled\n\n"
 
-            # Create comprehensive prompt matching mumble-bot style
+            # Attachments section
+            attachments_context = ""
+            if attachments_analysis:
+                attachments_context = "\n📎 ATTACHMENTS ANALYSIS:\n"
+                type_icons = {'image': '🖼️', 'pdf': '📄', 'docx': '📝', 'unsupported': '❌', 'error': '⚠️'}
+                for attach in attachments_analysis:
+                    icon = type_icons.get(attach['type'], '📎')
+                    size_kb = attach['size'] / 1024
+                    attachments_context += f"{icon} [{attach['type'].upper()}] {attach['filename']} ({size_kb:.1f} KB):\n"
+                    
+                    if 'analysis_text' in attach:
+                        attachments_context += f"   {attach['analysis_text']}\n\n"
+                    elif 'extracted_text' in attach:
+                        attachments_context += f"   {attach['extracted_text']}\n\n"
+                    
+                    if 'page_count' in attach:
+                        attachments_context += f"   (PDF has {attach['page_count']} pages)\n\n"
+
+            # Determine what to include in context based on email content
+            # Only include schedule if user asks about it
+            include_schedule = any(keyword in body.lower() for keyword in ['schedule', 'calendar', 'appointment', 'meeting', 'event', 'when'])
+
+            # Create simple, focused prompt
             reply_prompt = f"""You are {bot_persona}.
 
-You are an AI assistant responding to an email from {mapped_user if mapped_user else sender}.
-
-IMPORTANT CONTEXT ABOUT THE EMAIL SENDER ({mapped_user if mapped_user else sender}):
-{memory_context}{schedule_context}
-RECEIVED EMAIL:
-From: {sender}
-Subject: {subject}
-
-Message:
-{body}
-
+EMAIL FROM: {mapped_user if mapped_user else sender}
+SUBJECT: {subject}
+MESSAGE: {body}
+{attachments_context}
 ---
+{actions_context}
+🚨 CRITICAL RULES:
 
-CRITICAL INSTRUCTIONS:
-- The schedule and memories shown above belong to THE EMAIL SENDER ({mapped_user if mapped_user else sender}), NOT to you
-- When referring to their schedule, use "you" or "your", NEVER "I" or "my"
-- Example: "You have a haircut on Friday" NOT "I have a haircut"
-- You are an AI assistant helping THEM, not a person with your own schedule
+1. BE BRIEF AND DIRECT
+   - Keep replies under 100 words
+   - No formal greetings like "Dear Charles"
+   - No flowery language or unnecessary explanations
+   - Get straight to the point
 
-RESPONSE GUIDELINES:
-Generate a professional, helpful, and personalized email reply. Use the memories and schedule information above to provide relevant context in your response.
+2. REPORT ONLY WHAT ACTUALLY HAPPENED
+   - Look at the ACTION SUMMARY above
+   - If ✅ 1 calendar events: "Added [event] to your calendar for [date]"
+   - If ✅ 0 calendar events: Don't say you added anything
+   - If ❌ errors: Explain the error briefly
+   - DON'T say "thank you for adding to my calendar" - YOU add to THEIR calendar, not the other way around
 
-- Stay in character based on your persona, but remember you are an AI assistant
-- Reference relevant memories or schedule events that belong to THE SENDER
-- Be professional but conversational and friendly
-- Address the sender's questions or concerns directly
-- If asked about schedule/calendar, use ONLY the information shown above and refer to it as THEIR schedule
-- If you don't have enough information, acknowledge it politely
-- Keep the reply concise (under 250 words)
-- Do not include email headers, signatures, or formatting - just the body text
-- Do not make up information not provided in the context
-- ALWAYS use "you/your" when talking about the sender's schedule, NEVER "I/my"
+3. OWNERSHIP - THIS IS CRITICAL
+   - The user ASKED you to add events
+   - YOU (the AI) added events to THEIR calendar
+   - CORRECT: "I've added the flight to your calendar"
+   - WRONG: "Thank you for adding to my calendar"
+   - NEVER confuse who did what
 
-Your reply:"""
+4. DON'T LIST UNRELATED EVENTS
+   - If they ask about travel, ONLY mention travel
+   - Don't list baby showers, haircuts, etc. unless they ask "what's on my calendar"
+   - Stay focused on what they actually asked about
 
-            # Use retry logic for Ollama call
-            reply_text = self.call_ollama_with_retry(reply_prompt, max_retries=3, timeout=120)
+5. ANSWER THEIR QUESTION
+   - If they sent a PDF: acknowledge it briefly
+   - If they asked to add something: confirm what you added
+   - If they asked a question: answer it directly
+   - Don't add extra information they didn't ask for
+
+{schedule_context if include_schedule else ""}
+
+Your reply (brief and direct):"""
+
+            # Use retry logic for Ollama call - longer timeout if attachments present
+            timeout = 600 if attachments_analysis else 180  # 10 min for attachments, 3 min for regular
+            reply_text = self.call_ollama_with_retry(reply_prompt, max_retries=3, timeout=timeout)
 
             if reply_text:
                 # Add signature if configured
@@ -2013,7 +3162,8 @@ Your reply:"""
             return None
 
     def send_reply_email(self, settings: Dict, to_email: str, subject: str, reply_body: str,
-                         in_reply_to: str = None, references: str = None, mapped_user: str = None) -> bool:
+                         in_reply_to: str = None, references: str = None, mapped_user: str = None,
+                         thread_id: int = None) -> bool:
         """Send reply email via SMTP"""
         try:
             # Create message
@@ -2094,7 +3244,8 @@ Your reply:"""
                 subject=subject,
                 body=reply_body,
                 status='success',
-                mapped_user=mapped_user
+                mapped_user=mapped_user,
+                thread_id=thread_id
             )
 
             return True
@@ -2112,6 +3263,7 @@ Your reply:"""
                 body=reply_body,
                 status='error',
                 error_message=str(e),
+                thread_id=thread_id,
                 mapped_user=mapped_user
             )
 
@@ -2268,7 +3420,7 @@ Your message:"""
                         'num_predict': 150
                     }
                 },
-                timeout=30
+                timeout=180  # 3 minutes for regular text
             )
 
             if response.status_code == 200:
@@ -2593,16 +3745,52 @@ Manage your schedule at http://localhost:5002/schedule
                     message_id = msg.get('Message-ID', '')
                     references = msg.get('References', '')
 
-                    # Get email body
-                    body, html_body = self.get_email_body(msg)
+                    # Get email body and attachments
+                    body, html_body, attachments_data = self.get_email_body(msg)
 
                     logger.info(f"Processing email from {sender_email}: {subject}")
 
                     # Look up user mapping for logging
                     mapped_user = self.get_user_from_email(sender_email)
 
-                    # Log received email
-                    self.log_email(
+                    # Process attachments if present
+                    attachments_analysis = []
+                    temp_dir = None
+                    if attachments_data:
+                        logger.info(f"Processing {len(attachments_data)} attachment(s)")
+                        try:
+                            attachments_analysis = self.process_attachments(attachments_data, body)
+                            # Get temp directory from first processed attachment
+                            if attachments_analysis and attachments_analysis[0].get('filepath'):
+                                temp_dir = os.path.dirname(attachments_analysis[0]['filepath'])
+                        except Exception as e:
+                            logger.error(f"Error processing attachments: {e}", exc_info=True)
+
+                    # Build attachment metadata for logging
+                    attachments_metadata = []
+                    if attachments_analysis:
+                        for a in attachments_analysis:
+                            attachments_metadata.append({
+                                'filename': a['filename'],
+                                'type': a['type'],
+                                'size': a['size'],
+                                'analysis_preview': a.get('analysis_text', a.get('extracted_text', ''))[:200]
+                            })
+
+                    # Get or create thread based on subject
+                    thread_id = self.get_or_create_thread(
+                        subject=subject,
+                        user_email=sender_email,
+                        mapped_user=mapped_user,
+                        message_id=message_id
+                    )
+
+                    if not thread_id:
+                        logger.error(f"Failed to create/get thread for email from {sender_email}")
+                        thread_id = None  # Continue without thread tracking
+
+                    # Log received email with attachment info and thread_id
+                    email_log_id = self.log_email(
                         direction='received',
                         email_type='other',
                         from_email=sender_email,
@@ -2610,11 +3798,93 @@ Manage your schedule at http://localhost:5002/schedule
                         subject=subject,
                         body=body,
                         status='success',
-                        mapped_user=mapped_user
+                        mapped_user=mapped_user,
+                        attachments_count=len(attachments_analysis),
+                        attachments_metadata=attachments_metadata,
+                        thread_id=thread_id
                     )
 
-                    # Generate AI reply
-                    reply_text = self.generate_ai_reply(sender_email, subject, body, settings)
+                    # Save user message to thread history
+                    if thread_id and email_log_id:
+                        self.save_thread_message(
+                            thread_id=thread_id,
+                            email_log_id=email_log_id,
+                            role='user',
+                            message=body
+                        )
+
+                    # STEP 1: Extract and execute memory actions SYNCHRONOUSLY
+                    if thread_id and email_log_id:
+                        try:
+                            logger.info("Extracting memories synchronously...")
+                            memory_results = self.extract_and_save_memory_sync(
+                                user_message=body,
+                                user_name=mapped_user or sender_email
+                            )
+                            # Log each memory action
+                            for result in memory_results:
+                                self.log_action(
+                                    thread_id=thread_id,
+                                    email_log_id=email_log_id,
+                                    action_type='memory',
+                                    action='add',
+                                    intent=result.get('content', 'Memory extraction'),
+                                    status='success' if result.get('saved') else 'failed',
+                                    details=result,
+                                    error_message=result.get('error')
+                                )
+                            logger.info(f"Processed {len(memory_results)} memory extractions")
+                        except Exception as e:
+                            logger.error(f"Memory extraction failed: {e}", exc_info=True)
+                            self.log_action(
+                                thread_id=thread_id,
+                                email_log_id=email_log_id,
+                                action_type='memory',
+                                action='add',
+                                intent='Extract memories from email',
+                                status='failed',
+                                error_message=str(e)
+                            )
+
+                    # STEP 2: Extract and execute schedule actions SYNCHRONOUSLY
+                    if thread_id and email_log_id:
+                        try:
+                            logger.info("Extracting schedule events synchronously...")
+                            schedule_results = self.extract_and_manage_schedule_sync(
+                                user_message=body,
+                                user_name=mapped_user or sender_email
+                            )
+                            # Log each schedule action
+                            for result in schedule_results:
+                                self.log_action(
+                                    thread_id=thread_id,
+                                    email_log_id=email_log_id,
+                                    action_type='schedule',
+                                    action=result.get('action', 'add').lower(),
+                                    intent=result.get('title', 'Schedule management'),
+                                    status='success' if result.get('saved') else 'failed',
+                                    details=result,
+                                    error_message=result.get('error')
+                                )
+                            logger.info(f"Processed {len(schedule_results)} schedule actions")
+                        except Exception as e:
+                            logger.error(f"Schedule extraction failed: {e}", exc_info=True)
+                            self.log_action(
+                                thread_id=thread_id,
+                                email_log_id=email_log_id,
+                                action_type='schedule',
+                                action='add',
+                                intent='Extract schedule from email',
+                                status='failed',
+                                error_message=str(e)
+                            )
+
+                    # STEP 3: Generate AI reply with thread context (includes action results)
+                    reply_text = self.generate_ai_reply(
+                        sender_email, subject, body, settings,
+                        thread_id=thread_id,
+                        attachments_analysis=attachments_analysis
+                    )
 
                     if reply_text:
                         # Send reply (will be logged inside send_reply_email)
@@ -2625,30 +3895,43 @@ Manage your schedule at http://localhost:5002/schedule
                             reply_text,
                             in_reply_to=message_id,
                             references=f"{references} {message_id}".strip(),
-                            mapped_user=mapped_user
+                            mapped_user=mapped_user,
+                            thread_id=thread_id
                         )
 
                         if success:
-                            logger.info(f"Successfully replied to {sender_email}")
+                            logger.info(f"✅ Successfully replied to {sender_email}")
 
-                            # Extract and save memories in background (non-blocking)
-                            threading.Thread(
-                                target=self.extract_and_save_memory,
-                                args=(body, reply_text, mapped_user or sender_email, None),
-                                daemon=True
-                            ).start()
+                            # Save assistant message to thread history
+                            # Note: send_reply_email returns the email_log_id, we need to modify it
+                            if thread_id:
+                                # For now, log without email_log_id from send_reply_email
+                                # We'll enhance this by modifying send_reply_email to return log_id
+                                self.save_thread_message(
+                                    thread_id=thread_id,
+                                    email_log_id=None,  # TODO: get from send_reply_email
+                                    role='assistant',
+                                    message=reply_text
+                                )
 
-                            # Extract and manage schedule in background (non-blocking)
-                            threading.Thread(
-                                target=self.extract_and_manage_schedule,
-                                args=(body, reply_text, mapped_user or sender_email),
-                                daemon=True
-                            ).start()
+                            # Cleanup temporary attachments
+                            if temp_dir:
+                                try:
+                                    self.cleanup_attachments(temp_dir)
+                                except Exception as e:
+                                    logger.error(f"Error cleaning up attachments: {e}")
                         else:
-                            logger.error(f"Failed to send reply to {sender_email}")
+                            logger.error(f"❌ Failed to send reply to {sender_email}")
+
+                            # Cleanup temporary attachments even if reply failed
+                            if temp_dir:
+                                try:
+                                    self.cleanup_attachments(temp_dir)
+                                except Exception as e:
+                                    logger.error(f"Error cleaning up attachments: {e}")
                     else:
-                        logger.error(f"Failed to generate reply for email from {sender_email} - Ollama timeout")
-                        
+                        logger.error(f"❌ Failed to generate reply for email from {sender_email} - Ollama timeout")
+
                         # Log failed reply attempt
                         self.log_email(
                             direction='sent',
@@ -2659,11 +3942,26 @@ Manage your schedule at http://localhost:5002/schedule
                             body=f"Failed to generate reply. Original message: {body[:500]}",
                             status='error',
                             error_message='Ollama API failed after 3 retry attempts - reply generation timed out. Click retry to attempt again.',
-                            mapped_user=mapped_user
+                            mapped_user=mapped_user,
+                            thread_id=thread_id
                         )
+
+                        # Cleanup temporary attachments even after failed reply
+                        if temp_dir:
+                            try:
+                                self.cleanup_attachments(temp_dir)
+                            except Exception as e:
+                                logger.error(f"Error cleaning up attachments: {e}")
 
                 except Exception as e:
                     logger.error(f"Error processing email {email_id}: {e}", exc_info=True)
+                    
+                    # Cleanup temporary attachments on exception
+                    if 'temp_dir' in locals() and temp_dir:
+                        try:
+                            self.cleanup_attachments(temp_dir)
+                        except Exception as cleanup_e:
+                            logger.error(f"Error cleaning up attachments after exception: {cleanup_e}")
 
             # Update last checked timestamp
             self.update_last_checked()

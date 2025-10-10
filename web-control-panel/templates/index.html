@@ -403,6 +403,23 @@
                 <button onclick="refreshModels()" style="margin-left: 10px; background: #3498db;">Refresh Models</button>
             </div>
 
+            <!-- Vision Model Configuration -->
+            <div class="panel">
+                <h2>👁️ Vision Model (Email Attachments)</h2>
+                <div class="success-message" id="vision-success">Settings saved successfully!</div>
+                <p style="color: #7f8c8d; font-size: 0.9em; margin-top: 0;">Used for analyzing images in email attachments. Moondream is recommended for speed and efficiency.</p>
+
+                <div class="form-group">
+                    <label for="vision-model">Vision Model</label>
+                    <select id="vision-model">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <button onclick="saveVisionConfig()">Save Vision Model</button>
+                <button onclick="refreshVisionModels()" style="margin-left: 10px; background: #3498db;">Refresh Models</button>
+            </div>
+
             <!-- TTS Engine Configuration -->
             <div class="panel">
                 <h2>🔊 Text-to-Speech Engine</h2>
@@ -841,6 +858,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadStats();
             loadOllamaConfig();
+            loadVisionConfig();
             loadUsers();
             loadTTSEngine();
             loadWhisperLanguage();
@@ -981,6 +999,71 @@
 
                 if (response.ok) {
                     const successMsg = document.getElementById('ollama-success');
+                    successMsg.style.display = 'block';
+                    setTimeout(() => successMsg.style.display = 'none', 3000);
+                }
+            } catch (error) {
+                console.error('Error saving Ollama config:', error);
+            }
+        }
+
+        // Vision Model Configuration Functions
+        async function loadVisionConfig() {
+            try {
+                const response = await fetch('/api/ollama/vision_config');
+                const data = await response.json();
+
+                // Load available vision models
+                await refreshVisionModels();
+
+                // Set current vision model
+                document.getElementById('vision-model').value = data.vision_model;
+            } catch (error) {
+                console.error('Error loading vision config:', error);
+            }
+        }
+
+        async function refreshVisionModels() {
+            try {
+                const response = await fetch('/api/ollama/vision_models');
+                const data = await response.json();
+
+                const select = document.getElementById('vision-model');
+                const currentValue = select.value;
+
+                select.innerHTML = '';
+
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model;
+                        option.textContent = model;
+                        select.appendChild(option);
+                    });
+
+                    select.value = currentValue;
+                } else {
+                    select.innerHTML = '<option value="moondream:latest">moondream:latest</option>' +
+                                       '<option value="llava:latest">llava:latest</option>' +
+                                       '<option value="bakllava:latest">bakllava:latest</option>';
+                }
+            } catch (error) {
+                console.error('Error refreshing vision models:', error);
+            }
+        }
+
+        async function saveVisionConfig() {
+            const visionModel = document.getElementById('vision-model').value;
+
+            try {
+                const response = await fetch('/api/ollama/vision_config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({vision_model: visionModel})
+                });
+
+                if (response.ok) {
+                    const successMsg = document.getElementById('vision-success');
                     successMsg.style.display = 'block';
                     setTimeout(() => successMsg.style.display = 'none', 3000);
                 }
@@ -2057,6 +2140,39 @@
                             html += `<button onclick="toggleEmailBody(${log.id}, ${log.full_body.length > 500})" id="toggle-btn-${log.id}" style="margin-top: 5px; font-size: 12px; background: #667eea;">Show Full Body</button>`;
                             html += `<div id="fullbody-${log.id}" style="display: none; background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 5px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px;">${log.full_body}</div>`;
                         }
+                        html += '</div>';
+                    }
+
+                    // Attachments display
+                    if (log.attachments_count && log.attachments_count > 0) {
+                        html += '<div style="margin-top: 10px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
+                        html += `<strong>📎 Attachments (${log.attachments_count}):</strong>`;
+                        
+                        if (log.attachments_metadata && log.attachments_metadata.length > 0) {
+                            html += '<div style="margin-top: 8px;">';
+                            log.attachments_metadata.forEach((attachment, idx) => {
+                                const typeIcon = {
+                                    'image': '🖼️',
+                                    'pdf': '📄',
+                                    'docx': '📝',
+                                    'unsupported': '❌',
+                                    'error': '⚠️'
+                                }[attachment.type] || '📎';
+                                
+                                const sizeKB = (attachment.size / 1024).toFixed(1);
+                                
+                                html += '<div style="background: white; padding: 8px; border-radius: 4px; margin-bottom: 6px; border-left: 3px solid #ffc107;">';
+                                html += `<div style="font-weight: 600; margin-bottom: 4px;">${typeIcon} ${attachment.filename} <span style="color: #999; font-weight: normal; font-size: 12px;">(${sizeKB} KB)</span></div>`;
+                                
+                                if (attachment.analysis_preview) {
+                                    html += `<div style="font-size: 12px; color: #666; font-style: italic; margin-left: 24px;">${attachment.analysis_preview}${attachment.analysis_preview.length >= 200 ? '...' : ''}</div>`;
+                                }
+                                
+                                html += '</div>';
+                            });
+                            html += '</div>';
+                        }
+                        
                         html += '</div>';
                     }
 

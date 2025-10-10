@@ -78,6 +78,10 @@ def init_config_table():
         ON CONFLICT (key) DO NOTHING
     """)
     cursor.execute("""
+        INSERT INTO bot_config (key, value) VALUES ('ollama_vision_model', 'moondream:latest')
+        ON CONFLICT (key) DO NOTHING
+    """)
+    cursor.execute("""
         INSERT INTO bot_config (key, value) VALUES ('piper_voice', 'en_US-lessac-medium')
         ON CONFLICT (key) DO NOTHING
     """)
@@ -167,6 +171,64 @@ def get_ollama_models():
             return jsonify({'error': 'Failed to fetch models'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# Vision Model Configuration
+@app.route('/api/ollama/vision_config', methods=['GET'])
+def get_vision_config():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_vision_model'")
+    row = cursor.fetchone()
+    vision_model = row[0] if row else 'moondream:latest'
+    cursor.close()
+    conn.close()
+    
+    return jsonify({'vision_model': vision_model})
+
+@app.route('/api/ollama/vision_config', methods=['POST'])
+def update_vision_config():
+    data = request.get_json()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if 'vision_model' in data:
+        cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'ollama_vision_model'", (data['vision_model'],))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return jsonify({'success': True})
+
+@app.route('/api/ollama/vision_models', methods=['GET'])
+def get_vision_models():
+    """Get available vision models from Ollama"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_url'")
+    url = cursor.fetchone()[0]
+    cursor.close()
+    conn.close()
+    
+    try:
+        response = requests.get(f"{url}/api/tags", timeout=5)
+        if response.status_code == 200:
+            all_models = response.json().get('models', [])
+            # Filter for vision models (models that typically support images)
+            vision_keywords = ['vision', 'llava', 'moondream', 'bakllava', 'llama3.2-vision']
+            vision_models = [m['name'] for m in all_models if any(keyword in m['name'].lower() for keyword in vision_keywords)]
+            
+            # If no vision models found, return common vision model names as suggestions
+            if not vision_models:
+                vision_models = ['moondream:latest', 'llava:latest', 'bakllava:latest', 'llama3.2-vision:latest']
+            
+            return jsonify({'models': vision_models})
+        else:
+            # Return default suggestions if can't connect
+            return jsonify({'models': ['moondream:latest', 'llava:latest', 'bakllava:latest']})
+    except Exception as e:
+        # Return default suggestions on error
+        return jsonify({'models': ['moondream:latest', 'llava:latest', 'bakllava:latest']})
 
 # Conversation History
 @app.route('/api/conversations', methods=['GET'])
@@ -1354,7 +1416,7 @@ def get_email_logs():
         query = """
             SELECT id, direction, email_type, from_email, to_email, subject,
                    body_preview, full_body, status, error_message, mapped_user,
-                   timestamp, created_at
+                   timestamp, created_at, attachments_count, attachments_metadata
             FROM email_logs
             WHERE 1=1
         """
@@ -1420,7 +1482,9 @@ def get_email_logs():
                 'error_message': log[9],
                 'mapped_user': log[10],
                 'timestamp': format_timestamp_ny(log[11]) if log[11] else None,
-                'created_at': format_timestamp_ny(log[12]) if log[12] else None
+                'created_at': format_timestamp_ny(log[12]) if log[12] else None,
+                'attachments_count': log[13] if len(log) > 13 else 0,
+                'attachments_metadata': log[14] if len(log) > 14 and log[14] else []
             } for log in logs],
             'total': total_count,
             'limit': limit,

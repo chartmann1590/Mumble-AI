@@ -365,6 +365,158 @@ CHECK_INTERVAL_SECONDS=60  # How often to check if it's time to send
 - **CPU usage**: Minimal except during summary generation
 - **Network**: One SMTP connection per email sent
 
+## Attachment Processing
+
+### Overview
+
+The email bot can now read and analyze attachments sent via email! When you email the bot with an attachment and ask questions about it, the bot will use AI vision models (for images) or text extraction (for PDFs and Word documents) to understand the content and provide helpful responses.
+
+### Supported Attachment Types
+
+| Type | Extensions | Processing Method | Max Size |
+|------|-----------|-------------------|----------|
+| **Images** | JPG, JPEG, PNG, GIF, WEBP | Vision AI (Moondream) | 10MB |
+| **PDF Documents** | PDF | Text extraction (PyPDF2) | 10MB |
+| **Word Documents** | DOCX, DOC | Text extraction (python-docx) | 10MB |
+
+### How to Use
+
+1. **Send an email** to your configured IMAP address with one or more attachments
+2. **Ask questions** about the attachments in the email body
+3. **Receive an AI-generated reply** that answers your questions based on the attachment analysis
+
+**Example:**
+```
+Subject: What's in this image?
+
+Email Body:
+Hey bot, can you tell me what's in the attached screenshot? 
+Also, what do you think about the document I attached?
+
+Attachments:
+- screenshot.png (2.5 MB)
+- report.pdf (1.8 MB)
+```
+
+The bot will:
+- Analyze the image using the vision model (Moondream by default)
+- Extract and read the text from the PDF
+- Generate a personalized response answering your questions about both attachments
+
+### Vision Model Configuration
+
+The bot uses **Moondream** by default for image analysis. Moondream is fast, efficient, and runs well on most hardware.
+
+**To change the vision model:**
+
+1. Navigate to the Web Control Panel at `http://localhost:5002`
+2. Scroll to the **"👁️ Vision Model (Email Attachments)"** section
+3. Select a different model from the dropdown:
+   - `moondream:latest` (recommended - fast and efficient)
+   - `llava:latest` (more detailed analysis, slower)
+   - `bakllava:latest` (specialized for certain tasks)
+   - `llama3.2-vision:latest` (if available)
+4. Click **"Save Vision Model"**
+
+**Available models** depend on what you have downloaded in Ollama. To download a vision model:
+
+```bash
+ollama pull moondream
+ollama pull llava
+ollama pull bakllava
+```
+
+### Features
+
+✅ **Multiple attachments** - Process multiple files in a single email
+✅ **Individual analysis** - Each attachment is analyzed separately 
+✅ **Combined response** - The bot provides context-aware answers referencing specific attachments
+✅ **Full logging** - All attachment activity is logged in the web control panel
+✅ **Automatic cleanup** - Temporary files are deleted after processing
+✅ **Size limits** - Attachments over 10MB are automatically rejected with a warning
+✅ **Persona maintained** - The bot maintains its configured persona when discussing attachments
+
+### Web Control Panel Display
+
+Email logs in the web control panel now show:
+
+- 📎 **Attachment count badge** on emails with attachments
+- **Filename and type** for each attachment (🖼️ images, 📄 PDFs, 📝 docs)
+- **File size** in KB
+- **Analysis preview** (first 200 characters of the vision analysis or extracted text)
+
+Navigate to the **"📬 Email Activity Logs"** section to view attachment details.
+
+### How It Works
+
+**For Images:**
+1. Image is resized to max 800px width (if larger)
+2. Converted to base64 encoding
+3. Sent to Ollama vision model with a description prompt
+4. AI analyzes the image and describes what it sees
+5. Analysis is included in the bot's reply
+
+**For PDFs:**
+1. Text is extracted from all pages using PyPDF2
+2. Pages are concatenated with page markers
+3. Text is limited to first 5000 characters if too long
+4. Extracted text is included in the bot's context
+5. Bot can answer questions about the document content
+
+**For Word Documents:**
+1. All paragraphs are extracted using python-docx
+2. Text is joined together
+3. Limited to first 5000 characters if too long
+4. Extracted text is used to answer questions
+
+### Temporary Storage
+
+Attachments are saved temporarily during processing:
+
+- **Location**: `/tmp/mumble-attachments/{timestamp}/`
+- **Lifetime**: Deleted immediately after email reply is sent
+- **Security**: Each email gets its own timestamped directory
+
+### Error Handling
+
+The system handles various error scenarios gracefully:
+
+- **Unsupported file types**: Logged with warning, mentioned in reply
+- **Corrupt files**: Error logged, processing continues for other attachments
+- **Large files (>10MB)**: Skipped with warning in logs
+- **Vision model unavailable**: Falls back to "Unable to analyze image" message
+- **Ollama timeout**: Uses retry logic (3 attempts with exponential backoff)
+
+### Limitations
+
+- Maximum **10MB per attachment**
+- Only the file types listed above are supported
+- Vision analysis quality depends on the chosen model
+- PDF text extraction may not work with scanned/image-based PDFs
+- Processing time increases with file size and number of attachments
+
+### Troubleshooting
+
+**Vision model not working:**
+
+1. Check Ollama is running: `ollama list`
+2. Download the vision model: `ollama pull moondream`
+3. Verify in web control panel that the correct model is selected
+4. Check email-summary-service logs: `docker-compose logs -f email-summary-service`
+
+**Attachments not being processed:**
+
+1. Check attachment size (must be under 10MB)
+2. Verify file type is supported
+3. Check email-summary-service logs for errors
+4. Ensure IMAP receiving and auto-reply are enabled
+
+**Poor image analysis:**
+
+1. Try a different vision model (llava may provide more detail)
+2. Ensure image is clear and not too large
+3. Check that Ollama has enough resources
+
 ## Future Enhancements
 
 Possible improvements for future versions:
@@ -374,9 +526,9 @@ Possible improvements for future versions:
 - 🎨 **Customizable email templates**
 - 📅 **Per-user summaries** sent to individual email addresses
 - 🔍 **Keyword filtering** to include only relevant conversations
-- 📎 **Attachments** with full conversation logs
 - 🔐 **Encrypted emails** for sensitive content
 - 📱 **SMS summaries** via Twilio integration
+- 🔍 **OCR support** for scanned PDFs and images with text
 
 ## Support
 

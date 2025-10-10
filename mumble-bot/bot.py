@@ -973,17 +973,21 @@ CRITICAL RULES:
 5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
 6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
 7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
+8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
+9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
 
-IMPORTANT: Query questions should return empty array. Examples:
+IMPORTANT: Query questions and confirmations should return empty array. Examples:
 - "What's on my schedule?" → []
 - "Tell me about my calendar" → []
 - "Do I have anything tomorrow?" → []
 - "What do I have next week?" → []
+- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
+- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
 - Use date_expression field for the raw expression
-- Use HH:MM format (24-hour) for event_time, or null if no specific time
+- Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
 - Include description in content field
 
 Format (return empty array if nothing important):
@@ -1041,6 +1045,11 @@ JSON:"""
                                 date_expression = memory.get('date_expression') or memory.get('event_date')
                                 if date_expression:
                                     event_date = self.parse_date_expression(date_expression)
+                                
+                                # Skip schedule memories with unparseable dates
+                                if event_date is None:
+                                    logger.warning(f"Skipping schedule memory with unparseable date: '{date_expression}' - {memory['content']}")
+                                    continue
 
                             self.save_persistent_memory(
                                 user_name=user_name,
@@ -1070,6 +1079,18 @@ JSON:"""
         except Exception as e:
             logger.error(f"Error extracting memory: {e}", exc_info=True)
 
+    def _normalize_null_values(self, memories: List[Dict]) -> List[Dict]:
+        """Convert string 'null' to actual None in memory objects"""
+        null_fields = ['event_time', 'event_date', 'date_expression', 'description', 'time']
+        
+        for memory in memories:
+            if isinstance(memory, dict):
+                for field in null_fields:
+                    if field in memory and memory[field] == "null":
+                        memory[field] = None
+        
+        return memories
+
     def _parse_memory_json(self, text: str) -> Optional[List[Dict]]:
         """Parse JSON from LLM response with multiple fallback strategies"""
         import re
@@ -1078,7 +1099,7 @@ JSON:"""
         try:
             parsed = json.loads(text)
             if isinstance(parsed, list):
-                return parsed
+                return self._normalize_null_values(parsed)
             logger.warning("Parsed JSON is not a list, trying extraction...")
         except json.JSONDecodeError:
             pass
@@ -1091,7 +1112,7 @@ JSON:"""
                 json_str = json_match.group()
                 parsed = json.loads(json_str)
                 if isinstance(parsed, list):
-                    return parsed
+                    return self._normalize_null_values(parsed)
         except (json.JSONDecodeError, AttributeError):
             pass
 
@@ -1116,7 +1137,7 @@ JSON:"""
                 
                 parsed = json.loads(json_str)
                 if isinstance(parsed, list):
-                    return parsed
+                    return self._normalize_null_values(parsed)
         except (json.JSONDecodeError, AttributeError, ValueError):
             pass
 
@@ -1161,6 +1182,19 @@ JSON:"""
         
         return True
 
+    def _calculate_content_similarity(self, content1: str, content2: str) -> float:
+        """Calculate similarity between two content strings based on word overlap"""
+        words1 = set(content1.lower().split())
+        words2 = set(content2.lower().split())
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0.0
+
     def save_persistent_memory(self, user_name: str, category: str, content: str, session_id: str = None, importance: int = 5, tags: List[str] = None, event_date: str = None, event_time: str = None):
         """Save a persistent memory to the database (with deduplication)"""
         conn = None
@@ -1171,7 +1205,7 @@ JSON:"""
 
                 # Check for duplicates based on category type
                 if category == 'schedule' and event_date:
-                    # For schedule memories, check user, category, event_date, and event_time
+                    # For schedule memories, check exact match first
                     cursor.execute(
                         """
                         SELECT id, content, importance
@@ -1181,6 +1215,55 @@ JSON:"""
                         """,
                         (user_name, category, event_date, event_time)
                     )
+                    
+                    existing = cursor.fetchone()
+                    
+                    # If no exact match, check for similar events within ±3 days
+                    if not existing:
+                        try:
+                            target_date = datetime.strptime(event_date, '%Y-%m-%d').date()
+                            date_range_start = (target_date - timedelta(days=3)).strftime('%Y-%m-%d')
+                            date_range_end = (target_date + timedelta(days=3)).strftime('%Y-%m-%d')
+                            
+                            cursor.execute(
+                                """
+                                SELECT id, content, importance, event_date
+                                FROM persistent_memories
+                                WHERE user_name = %s AND category = %s 
+                                AND event_date BETWEEN %s AND %s
+                                AND active = TRUE
+                                """,
+                                (user_name, category, date_range_start, date_range_end)
+                            )
+                            
+                            nearby_events = cursor.fetchall()
+                            
+                            # Check for similar content using fuzzy matching
+                            for event_id, event_content, event_importance, event_date_str in nearby_events:
+                                similarity = self._calculate_content_similarity(content, event_content)
+                                if similarity > 0.6:  # >60% word overlap
+                                    logger.info(f"Similar schedule event detected for {user_name}: '{content}' vs '{event_content}' (similarity: {similarity:.2f}). Skipping. Existing ID: {event_id}")
+                                    cursor.close()
+                                    return
+                        except Exception as e:
+                            logger.debug(f"Error in fuzzy deduplication check: {e}")
+                            # Continue with normal processing if fuzzy matching fails
+                    
+                    if existing:
+                        existing_id, existing_content, existing_importance = existing
+                        logger.info(f"Duplicate schedule memory detected for {user_name} on {event_date}. Skipping. Existing ID: {existing_id}")
+                        
+                        # If new importance is higher, update it
+                        if importance > existing_importance:
+                            cursor.execute(
+                                "UPDATE persistent_memories SET importance = %s WHERE id = %s",
+                                (importance, existing_id)
+                            )
+                            conn.commit()
+                            logger.info(f"Updated importance of existing memory ID {existing_id} from {existing_importance} to {importance}")
+                        
+                        cursor.close()
+                        return
                 else:
                     # For non-schedule memories, check for exact content match
                     cursor.execute(
@@ -1594,6 +1677,51 @@ JSON:"""
 
                 result_date = reference_date + timedelta(days=days_ahead)
                 return result_date.strftime('%Y-%m-%d')
+
+        # Handle multiple dates: "October 11th and October 18th" -> use first date
+        if ' and ' in date_expr or ',' in date_expr:
+            # Split on common separators
+            parts = re.split(r'\s+and\s+|,\s*', date_expr)
+            if len(parts) > 1:
+                logger.warning(f"Multiple dates detected in '{date_expr}', using first date: '{parts[0]}'")
+                # Recursively parse the first date
+                return self.parse_date_expression(parts[0].strip(), reference_date)
+
+        # Handle date ranges: "October 21-25" -> use start date
+        range_match = re.match(r'([a-z]+\s+\d{1,2})(?:st|nd|rd|th)?\s*-\s*(\d{1,2})(?:st|nd|rd|th)?', date_expr)
+        if range_match:
+            start_date_expr = range_match.group(1)
+            end_day = range_match.group(2)
+            logger.info(f"Date range detected in '{date_expr}', using start date: '{start_date_expr}'")
+            # Recursively parse the start date
+            return self.parse_date_expression(start_date_expr, reference_date)
+
+        # Handle month name + ordinal day: "October 17th", "january 3rd"
+        month_names = {
+            'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+            'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
+            'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9, 'sept': 9,
+            'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+        }
+        
+        for month_name, month_num in month_names.items():
+            # Match "October 17" or "October 17th" (with optional ordinal suffix)
+            month_pattern = rf'{month_name}\s+(\d{{1,2}})(?:st|nd|rd|th)?'
+            month_match = re.search(month_pattern, date_expr)
+            if month_match:
+                day = int(month_match.group(1))
+                year = reference_date.year
+                
+                # If the date has passed this year, assume next year
+                try:
+                    result_date = datetime(year, month_num, day, tzinfo=ny_tz)
+                    if result_date < reference_date:
+                        result_date = datetime(year + 1, month_num, day, tzinfo=ny_tz)
+                    return result_date.strftime('%Y-%m-%d')
+                except ValueError:
+                    # Invalid date (e.g., February 30)
+                    logger.warning(f"Invalid date: {month_name} {day}")
+                    continue
 
         # Try parsing common date formats
         try:

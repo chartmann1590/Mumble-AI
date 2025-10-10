@@ -352,10 +352,32 @@ The bot automatically extracts and remembers important information from conversa
 
 For detailed information, see [PERSISTENT_MEMORIES_GUIDE.md](./PERSISTENT_MEMORIES_GUIDE.md)
 
-### Email Summaries
+### Email Bot & Summaries
 
-Stay informed with daily AI-generated email summaries of all conversations:
+**AI Email Assistant** - Intelligent email processing with thread-aware conversations:
 
+**Two-Way Email Communication:**
+1. Configure IMAP settings in the web control panel to receive emails
+2. Send emails to the bot's email address with requests or questions
+3. Bot automatically processes attachments (PDFs, images, documents)
+4. Receives intelligent, context-aware replies within minutes
+
+**Thread-Aware Intelligence:**
+- **Conversation Memory** - Bot remembers entire email threads by subject line
+- **Action Tracking** - Every calendar/memory action logged with success/failure status
+- **Truthful Reporting** - Bot only claims what it actually did, with Event IDs and timestamps
+- **Error Explanations** - If actions fail, bot explains why and asks for clarification
+- **Brief & Direct** - Replies kept under 100 words, no formal greetings or fluff
+- **Focused Context** - Only mentions relevant information (no listing unrelated events)
+
+**What the Bot Can Do Via Email:**
+- **Add Calendar Events** - "Add team meeting Monday at 2pm" → Creates event, reports Event ID
+- **Save Information** - "Remember I prefer morning meetings" → Saves to persistent memory
+- **Answer Questions** - "What's on my calendar this week?" → Lists relevant events
+- **Process Attachments** - Analyzes PDFs, images, and documents with AI vision
+- **Natural Language** - Understands "tomorrow", "next Friday", "in 3 days", etc.
+
+**Daily Email Summaries:**
 1. Go to `http://localhost:5002` and scroll to "📧 Email Summary Settings"
 2. Configure your SMTP settings (host, port, credentials)
 3. Set recipient email and preferred delivery time
@@ -370,7 +392,7 @@ The bot will send beautifully formatted HTML emails with:
 - **Professional Design** - Responsive HTML with gradient headers and card layouts
 - **Scheduled Delivery** - Automatic sending at your chosen time (default: 10pm EST)
 
-For detailed information, see [EMAIL_SUMMARIES_GUIDE.md](./EMAIL_SUMMARIES_GUIDE.md)
+For detailed information, see [EMAIL_SUMMARIES_GUIDE.md](./docs/EMAIL_SUMMARIES_GUIDE.md)
 
 #### Email Retry Feature
 
