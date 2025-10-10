@@ -577,7 +577,9 @@
                 }
 
                 container.innerHTML = events.map(event => {
-                    const date = new Date(event.event_date);
+                    // Parse date as local date, not UTC
+                    const dateParts = event.event_date.split('-');
+                    const date = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
                     const dateStr = date.toLocaleDateString('en-US', {
                         weekday: 'short',
                         month: 'short',
