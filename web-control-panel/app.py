@@ -97,6 +97,10 @@ def init_config_table():
         INSERT INTO bot_config (key, value) VALUES ('silero_voice', 'en_0')
         ON CONFLICT (key) DO NOTHING
     """)
+    cursor.execute("""
+        INSERT INTO bot_config (key, value) VALUES ('chatterbox_voice', '1')
+        ON CONFLICT (key) DO NOTHING
+    """)
 
     conn.commit()
     cursor.close()
@@ -500,7 +504,7 @@ def set_tts_engine():
     data = request.json
     engine = data.get('engine', 'piper')
 
-    if engine not in ['piper', 'silero']:
+    if engine not in ['piper', 'silero', 'chatterbox']:
         return jsonify({'error': 'Invalid TTS engine'}), 400
 
     conn = get_db_connection()
@@ -567,7 +571,7 @@ def preview_silero_voice():
         response = requests.post(
             'http://silero-tts:5004/synthesize',
             json={'text': preview_text, 'voice': voice},
-            timeout=10
+            timeout=30  # Increased timeout for Silero
         )
 
         if response.status_code == 200:
@@ -577,7 +581,116 @@ def preview_silero_voice():
             return jsonify({'error': 'Failed to generate preview'}), 500
 
     except Exception as e:
-        logging.error(f"Error in Silero preview: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# Chatterbox Voice Configuration
+@app.route('/api/chatterbox/voices', methods=['GET'])
+def get_chatterbox_voices():
+    """Get cloned voices from database"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, description, language, created_at, tags
+            FROM chatterbox_voices
+            WHERE is_active = true
+            ORDER BY created_at DESC
+        """)
+
+        voices = []
+        for row in cursor.fetchall():
+            voices.append({
+                'id': row[0],
+                'name': row[1],
+                'description': row[2],
+                'language': row[3],
+                'created_at': row[4].isoformat() if row[4] else None,
+                'tags': row[5] if row[5] else []
+            })
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({'voices': voices})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/chatterbox/current', methods=['GET'])
+def get_current_chatterbox_voice():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'chatterbox_voice'")
+    result = cursor.fetchone()
+    voice = result[0] if result else '1'
+    cursor.close()
+    conn.close()
+
+    return jsonify({'voice': voice})
+
+@app.route('/api/chatterbox/current', methods=['POST'])
+def set_current_chatterbox_voice():
+    data = request.json
+    voice = data.get('voice')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'chatterbox_voice'", (voice,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'success': True})
+
+@app.route('/api/chatterbox/preview', methods=['POST'])
+def preview_chatterbox_voice():
+    """Preview a Chatterbox cloned voice by generating sample audio"""
+    from flask import Response
+
+    data = request.json
+    voice_id = data.get('voice_id')
+
+    if not voice_id:
+        return jsonify({'error': 'No voice_id specified'}), 400
+
+    try:
+        # Verify the voice exists in the database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id
+            FROM chatterbox_voices
+            WHERE id = %s AND is_active = true
+        """, (voice_id,))
+
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row:
+            return jsonify({'error': 'Voice not found'}), 404
+
+        # Call the tts-web-interface synthesize endpoint which has access to the cloned voices
+        preview_text = "Hello, this is a preview of this voice. How do I sound?"
+        response = requests.post(
+            'http://tts-web-interface:5003/api/synthesize',
+            json={
+                'text': preview_text,
+                'voice': int(voice_id),  # voice parameter is the cloned voice ID
+                'engine': 'chatterbox'
+            },
+            timeout=300  # Voice cloning can take a while
+        )
+
+        if response.status_code == 200:
+            # Return audio as response using Flask Response
+            return Response(response.content, mimetype='audio/wav')
+        else:
+            error_msg = response.json().get('error', 'Failed to generate preview') if response.content else 'Failed to generate preview'
+            return jsonify({'error': error_msg}), 500
+
+    except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

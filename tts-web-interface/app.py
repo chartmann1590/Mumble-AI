@@ -348,26 +348,38 @@ def synthesize():
             conn = get_db_connection()
             if not conn:
                 return jsonify({'error': 'Database connection failed'}), 500
-            
+
             cursor = conn.cursor()
             cursor.execute("SELECT reference_audio_path, language FROM chatterbox_voices WHERE id = %s", (voice,))
             result = cursor.fetchone()
             cursor.close()
             conn.close()
-            
+
             if not result:
                 return jsonify({'error': 'Voice not found'}), 404
-            
-            reference_audio, lang = result
-            
-            # Call Chatterbox TTS service
-            payload = {
-                "text": text,
-                "speaker_wav": reference_audio,
-                "language": lang,
-                "speed": 1.0
-            }
-            logging.info(f"Sending payload to Chatterbox: {payload}")
+
+            reference_audio_path, lang = result
+
+            # Read the audio file and encode as base64 for cross-container communication
+            import base64
+            try:
+                with open(reference_audio_path, 'rb') as audio_file:
+                    audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
+
+                # Call Chatterbox TTS service with base64-encoded audio
+                payload = {
+                    "text": text,
+                    "speaker_wav": f"data:audio/wav;base64,{audio_base64}",
+                    "language": lang,
+                    "speed": 1.0
+                }
+                logging.info(f"Sending payload to Chatterbox (audio size: {len(audio_base64)} bytes base64)")
+            except FileNotFoundError:
+                logging.error(f"Reference audio file not found: {reference_audio_path}")
+                return jsonify({'error': 'Reference audio file not found'}), 404
+            except Exception as e:
+                logging.error(f"Error reading reference audio: {str(e)}")
+                return jsonify({'error': 'Failed to read reference audio'}), 500
 
             tts_response = requests.post(
                 f"{CHATTERBOX_TTS_URL}/api/tts",

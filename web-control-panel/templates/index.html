@@ -413,9 +413,10 @@
                     <select id="tts-engine" onchange="changeTTSEngine(this.value)">
                         <option value="piper">Piper TTS (CPU)</option>
                         <option value="silero">Silero TTS (GPU - Faster)</option>
+                        <option value="chatterbox">Chatterbox TTS (Voice Cloning)</option>
                     </select>
                     <p style="font-size: 0.85em; color: #666; margin-top: 5px;">
-                        💡 Silero uses your GPU for much faster speech generation
+                        💡 Silero uses your GPU for much faster speech generation. Chatterbox allows custom voice cloning.
                     </p>
                 </div>
 
@@ -439,6 +440,24 @@
                         </select>
                     </div>
                     <button onclick="previewSileroVoice()" style="background: #3498db;">🔊 Preview Silero Voice</button>
+                </div>
+
+                <!-- Chatterbox Voice Selection (hidden when Piper/Silero is selected) -->
+                <div id="chatterbox-voice-selection" style="display: none;">
+                    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 5px; padding: 12px; margin-bottom: 15px;">
+                        <strong style="color: #856404;">ℹ️ Voice Cloning Notice:</strong>
+                        <p style="color: #856404; margin: 5px 0 0 0; font-size: 0.9em;">
+                            To clone new voices, please use the <a href="http://localhost:5003" target="_blank" style="color: #667eea; font-weight: 600;">TTS Voice Generator</a> page. Cloned voices will automatically appear in the dropdown below.
+                        </p>
+                    </div>
+                    <div class="form-group">
+                        <label for="chatterbox-voice-select">Cloned Voice</label>
+                        <select id="chatterbox-voice-select" onchange="selectChatterboxVoice(this.value)">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <button onclick="previewChatterboxVoice()" style="background: #3498db;">🔊 Preview Cloned Voice</button>
+                    <button onclick="loadChatterboxVoices()" style="margin-left: 10px; background: #9b59b6;">🔄 Refresh Voice List</button>
                 </div>
             </div>
 
@@ -983,10 +1002,17 @@
                 if (data.engine === 'silero') {
                     document.getElementById('piper-voice-selection').style.display = 'none';
                     document.getElementById('silero-voice-selection').style.display = 'block';
+                    document.getElementById('chatterbox-voice-selection').style.display = 'none';
                     await loadSileroVoices();
+                } else if (data.engine === 'chatterbox') {
+                    document.getElementById('piper-voice-selection').style.display = 'none';
+                    document.getElementById('silero-voice-selection').style.display = 'none';
+                    document.getElementById('chatterbox-voice-selection').style.display = 'block';
+                    await loadChatterboxVoices();
                 } else {
                     document.getElementById('piper-voice-selection').style.display = 'block';
                     document.getElementById('silero-voice-selection').style.display = 'none';
+                    document.getElementById('chatterbox-voice-selection').style.display = 'none';
                     await loadPiperVoices();
                 }
             } catch (error) {
@@ -1007,10 +1033,17 @@
                     if (engine === 'silero') {
                         document.getElementById('piper-voice-selection').style.display = 'none';
                         document.getElementById('silero-voice-selection').style.display = 'block';
+                        document.getElementById('chatterbox-voice-selection').style.display = 'none';
                         await loadSileroVoices();
+                    } else if (engine === 'chatterbox') {
+                        document.getElementById('piper-voice-selection').style.display = 'none';
+                        document.getElementById('silero-voice-selection').style.display = 'none';
+                        document.getElementById('chatterbox-voice-selection').style.display = 'block';
+                        await loadChatterboxVoices();
                     } else {
                         document.getElementById('piper-voice-selection').style.display = 'block';
                         document.getElementById('silero-voice-selection').style.display = 'none';
+                        document.getElementById('chatterbox-voice-selection').style.display = 'none';
                         await loadPiperVoices();
                     }
 
@@ -1166,6 +1199,107 @@
                 }
             } catch (error) {
                 console.error('Error selecting Silero voice:', error);
+            }
+        }
+
+        async function loadChatterboxVoices() {
+            try {
+                const [voicesResp, currentResp] = await Promise.all([
+                    fetch('/api/chatterbox/voices'),
+                    fetch('/api/chatterbox/current')
+                ]);
+
+                const voicesData = await voicesResp.json();
+                const currentData = await currentResp.json();
+
+                const select = document.getElementById('chatterbox-voice-select');
+                select.innerHTML = '';
+
+                if (!voicesData.voices || voicesData.voices.length === 0) {
+                    select.innerHTML = '<option>No cloned voices available</option>';
+                    return;
+                }
+
+                voicesData.voices.forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice.id;
+
+                    // Format: name - description (language)
+                    let label = voice.name;
+                    if (voice.description) {
+                        label += ` - ${voice.description}`;
+                    }
+                    if (voice.language) {
+                        label += ` (${voice.language})`;
+                    }
+
+                    option.textContent = label;
+
+                    if (voice.id === parseInt(currentData.voice)) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading Chatterbox voices:', error);
+                const select = document.getElementById('chatterbox-voice-select');
+                select.innerHTML = '<option>Error loading voices</option>';
+            }
+        }
+
+        async function selectChatterboxVoice(voiceId) {
+            if (!voiceId) return;
+
+            try {
+                const response = await fetch('/api/chatterbox/current', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({voice: voiceId})
+                });
+
+                if (response.ok) {
+                    const successMsg = document.getElementById('tts-success');
+                    successMsg.style.display = 'block';
+                    setTimeout(() => successMsg.style.display = 'none', 3000);
+                }
+            } catch (error) {
+                console.error('Error selecting Chatterbox voice:', error);
+            }
+        }
+
+        async function previewChatterboxVoice() {
+            const voiceId = document.getElementById('chatterbox-voice-select').value;
+            if (!voiceId) {
+                alert('Please select a cloned voice first');
+                return;
+            }
+
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '⏳ Generating...';
+
+            try {
+                const response = await fetch('/api/chatterbox/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({voice_id: voiceId})
+                });
+
+                if (response.ok) {
+                    const audioBlob = await response.blob();
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+                } else {
+                    const errorData = await response.json();
+                    alert('Error generating preview: ' + (errorData.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error previewing voice:', error);
+                alert('Error previewing voice: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔊 Preview Cloned Voice';
             }
         }
 
