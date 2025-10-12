@@ -156,6 +156,8 @@ dmypy.json
 # Personal documentation files
 AGENTS.md
 CLAUDE.md
+agents.md
+claude.md
 
 # Backup SQL files
 sql/backup-*.sql
