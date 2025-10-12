@@ -182,7 +182,7 @@ def get_vision_config():
     vision_model = row[0] if row else 'moondream:latest'
     cursor.close()
     conn.close()
-    
+
     return jsonify({'vision_model': vision_model})
 
 @app.route('/api/ollama/vision_config', methods=['POST'])
@@ -190,14 +190,42 @@ def update_vision_config():
     data = request.get_json()
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     if 'vision_model' in data:
         cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'ollama_vision_model'", (data['vision_model'],))
-    
+
     conn.commit()
     cursor.close()
     conn.close()
-    
+
+    return jsonify({'success': True})
+
+# Memory Extraction Model Configuration
+@app.route('/api/ollama/memory_model_config', methods=['GET'])
+def get_memory_model_config():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'memory_extraction_model'")
+    row = cursor.fetchone()
+    memory_model = row[0] if row else 'qwen2.5:3b'
+    cursor.close()
+    conn.close()
+
+    return jsonify({'memory_extraction_model': memory_model})
+
+@app.route('/api/ollama/memory_model_config', methods=['POST'])
+def update_memory_model_config():
+    data = request.get_json()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if 'memory_extraction_model' in data:
+        cursor.execute("UPDATE bot_config SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = 'memory_extraction_model'", (data['memory_extraction_model'],))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
     return jsonify({'success': True})
 
 @app.route('/api/ollama/vision_models', methods=['GET'])
@@ -1864,6 +1892,58 @@ def get_upcoming_events():
         'recipient_email': e[10] if len(e) > 10 else None,
         'reminder_sent': e[11] if len(e) > 11 else False
     } for e in events])
+
+@app.route('/api/advanced-settings', methods=['GET'])
+def get_advanced_settings():
+    """Get advanced AI settings"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    settings = {}
+    setting_keys = [
+        'short_term_memory_limit',
+        'long_term_memory_limit',
+        'use_chain_of_thought',
+        'use_semantic_memory_ranking',
+        'use_response_validation',
+        'enable_parallel_processing'
+    ]
+    
+    for key in setting_keys:
+        cursor.execute("SELECT value FROM bot_config WHERE key = %s", (key,))
+        result = cursor.fetchone()
+        settings[key] = result[0] if result else ('10' if 'limit' in key else 'true')
+    
+    cursor.close()
+    conn.close()
+    
+    return jsonify(settings)
+
+@app.route('/api/advanced-settings', methods=['POST'])
+def update_advanced_settings():
+    """Update advanced AI settings"""
+    data = request.json
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        for key, value in data.items():
+            cursor.execute("""
+                INSERT INTO bot_config (key, value, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
+            """, (key, str(value)))
+        
+        conn.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 def init_voices():
     """Ensure voices are downloaded on startup"""

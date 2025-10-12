@@ -59,17 +59,22 @@ CREATE TABLE IF NOT EXISTS bot_config (
 INSERT INTO bot_config (key, value) VALUES
     ('ollama_url', 'http://host.docker.internal:11434'),
     ('ollama_model', 'llama3.2:latest'),
+    ('memory_extraction_model', 'qwen2.5:3b'),
     ('piper_voice', 'en_US-lessac-medium'),
     ('bot_persona', ''),
     ('whisper_language', 'auto'),
     ('tts_engine', 'piper'),
     ('silero_voice', 'en_0'),
     ('embedding_model', 'nomic-embed-text:latest'),
-    ('short_term_memory_limit', '3'),
-    ('long_term_memory_limit', '3'),
+    ('short_term_memory_limit', '10'),
+    ('long_term_memory_limit', '10'),
     ('semantic_similarity_threshold', '0.7'),
     ('session_timeout_minutes', '30'),
-    ('session_reactivation_minutes', '10')
+    ('session_reactivation_minutes', '10'),
+    ('use_chain_of_thought', 'false'),
+    ('use_semantic_memory_ranking', 'true'),
+    ('use_response_validation', 'false'),
+    ('enable_parallel_processing', 'true')
 ON CONFLICT (key) DO NOTHING;
 
 -- Function to calculate cosine similarity between two embedding vectors
@@ -314,3 +319,27 @@ COMMENT ON TABLE email_logs IS 'Logs all email activity including received and s
 COMMENT ON TABLE chatterbox_voices IS 'Stores voice cloning presets for Chatterbox TTS service';
 COMMENT ON COLUMN chatterbox_voices.reference_audio_path IS 'Path to reference audio file for voice cloning';
 COMMENT ON COLUMN chatterbox_voices.metadata IS 'Additional metadata in JSON format (e.g., speaker info, recording details)';
+
+-- Additional composite indexes for performance optimization
+CREATE INDEX IF NOT EXISTS idx_memories_user_active_importance 
+  ON persistent_memories(user_name, active, importance DESC);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_user_session_timestamp 
+  ON conversation_history(user_name, session_id, timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_user_date 
+  ON schedule_events(user_name, event_date, active);
+
+CREATE INDEX IF NOT EXISTS idx_email_logs_direction_timestamp 
+  ON email_logs(direction, timestamp DESC);
+
+-- Add embedding column to persistent_memories if it doesn't exist for semantic search
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='persistent_memories' AND column_name='embedding') THEN
+        ALTER TABLE persistent_memories ADD COLUMN embedding FLOAT8[];
+    END IF;
+END $$;
+
+-- Create GIN index for array similarity searches
+CREATE INDEX IF NOT EXISTS idx_memories_embedding ON persistent_memories USING GIN(embedding) WHERE embedding IS NOT NULL;

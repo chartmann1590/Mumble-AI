@@ -13,6 +13,7 @@ import functools
 import json
 import uuid
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from psycopg2 import pool
 from pymumble_py3 import Mumble
@@ -189,6 +190,101 @@ def create_health_handler(bot_instance):
     return handler
 
 
+class SmartCache:
+    """Multi-layer caching system for AI bot"""
+    def __init__(self):
+        self.memory_cache = {}
+        self.memory_cache_time = {}
+        self.config_cache = {}
+        self.config_cache_time = {}
+        self.embedding_cache = {}
+        self.embedding_cache_time = {}
+        self.schedule_cache = {}
+        self.schedule_cache_time = {}
+        self.cache_ttl = 300  # 5 minutes default TTL
+        self._lock = threading.Lock()
+    
+    def get_cached_memories(self, user_name):
+        """Get cached memories if still valid"""
+        with self._lock:
+            if user_name in self.memory_cache:
+                age = time.time() - self.memory_cache_time.get(user_name, 0)
+                if age < self.cache_ttl:
+                    logger.debug(f"Memory cache HIT for {user_name} (age: {age:.1f}s)")
+                    return self.memory_cache[user_name]
+                else:
+                    logger.debug(f"Memory cache EXPIRED for {user_name} (age: {age:.1f}s)")
+            return None
+    
+    def cache_memories(self, user_name, memories):
+        """Cache memories for a user"""
+        with self._lock:
+            self.memory_cache[user_name] = memories
+            self.memory_cache_time[user_name] = time.time()
+            logger.debug(f"Cached {len(memories)} memories for {user_name}")
+    
+    def get_cached_config(self, key):
+        """Get cached config if still valid"""
+        with self._lock:
+            if key in self.config_cache:
+                age = time.time() - self.config_cache_time.get(key, 0)
+                if age < self.cache_ttl:
+                    return self.config_cache[key]
+            return None
+    
+    def cache_config(self, key, value):
+        """Cache a config value"""
+        with self._lock:
+            self.config_cache[key] = value
+            self.config_cache_time[key] = time.time()
+    
+    def get_cached_embedding(self, text_hash):
+        """Get cached embedding if still valid"""
+        with self._lock:
+            if text_hash in self.embedding_cache:
+                age = time.time() - self.embedding_cache_time.get(text_hash, 0)
+                if age < self.cache_ttl * 2:  # Embeddings are more expensive, cache longer
+                    return self.embedding_cache[text_hash]
+            return None
+    
+    def cache_embedding(self, text_hash, embedding):
+        """Cache an embedding"""
+        with self._lock:
+            self.embedding_cache[text_hash] = embedding
+            self.embedding_cache_time[text_hash] = time.time()
+    
+    def get_cached_schedule(self, user_name):
+        """Get cached schedule if still valid"""
+        with self._lock:
+            if user_name in self.schedule_cache:
+                age = time.time() - self.schedule_cache_time.get(user_name, 0)
+                if age < self.cache_ttl:
+                    return self.schedule_cache[user_name]
+            return None
+    
+    def cache_schedule(self, user_name, schedule_events):
+        """Cache schedule events for a user"""
+        with self._lock:
+            self.schedule_cache[user_name] = schedule_events
+            self.schedule_cache_time[user_name] = time.time()
+    
+    def invalidate_user(self, user_name):
+        """Invalidate all caches for a user"""
+        with self._lock:
+            self.memory_cache.pop(user_name, None)
+            self.memory_cache_time.pop(user_name, None)
+            self.schedule_cache.pop(user_name, None)
+            self.schedule_cache_time.pop(user_name, None)
+            logger.info(f"Invalidated all caches for {user_name}")
+    
+    def invalidate_config(self):
+        """Invalidate config cache"""
+        with self._lock:
+            self.config_cache.clear()
+            self.config_cache_time.clear()
+            logger.info("Invalidated config cache")
+
+
 class MumbleAIBot:
     def __init__(self):
         # Configuration
@@ -223,6 +319,9 @@ class MumbleAIBot:
         self.user_sessions = {}  # Track active sessions per user
         self.session_lock = threading.Lock()
         self.embedding_cache = {}  # Cache embeddings to reduce API calls
+        
+        # Initialize smart cache system for performance
+        self.smart_cache = SmartCache()
         
         # Error handling and retry configuration
         self.retry_config = RetryConfig(
@@ -424,7 +523,13 @@ class MumbleAIBot:
                 self.release_db_connection(conn)
 
     def get_config(self, key, default=None):
-        """Get a config value from the database with error handling"""
+        """Get a config value from the database with caching for performance"""
+        # Check cache first
+        cached_value = self.smart_cache.get_cached_config(key)
+        if cached_value is not None:
+            return cached_value
+        
+        # Cache miss, fetch from database
         conn = None
         try:
             conn = self.get_db_connection()
@@ -438,7 +543,10 @@ class MumbleAIBot:
             cursor.close()
 
             if result:
-                return result[0]
+                value = result[0]
+                # Cache the value
+                self.smart_cache.cache_config(key, value)
+                return value
             return default
         except Exception as e:
             logger.error(f"Error getting config {key}: {e}")
@@ -692,9 +800,14 @@ class MumbleAIBot:
             raise requests.RequestException(f"Transcription failed: {response.text}")
 
     def generate_embedding(self, text: str) -> Optional[List[float]]:
-        """Generate embedding vector for text using Ollama's embedding model"""
-        # Check cache first
+        """Generate embedding vector for text using Ollama's embedding model with smart caching"""
+        # Check smart cache first (longer TTL for embeddings)
         text_hash = hashlib.md5(text.encode()).hexdigest()
+        cached_embedding = self.smart_cache.get_cached_embedding(text_hash)
+        if cached_embedding is not None:
+            return cached_embedding
+        
+        # Also check legacy cache for backward compatibility
         if text_hash in self.embedding_cache:
             return self.embedding_cache[text_hash]
 
@@ -713,7 +826,9 @@ class MumbleAIBot:
 
             if response.status_code == 200:
                 embedding = response.json().get('embedding', [])
-                # Cache the embedding
+                # Cache the embedding in smart cache
+                self.smart_cache.cache_embedding(text_hash, embedding)
+                # Also keep in legacy cache for backward compatibility
                 self.embedding_cache[text_hash] = embedding
                 return embedding
             else:
@@ -942,7 +1057,8 @@ class MumbleAIBot:
         """Extract important information from conversation and save as persistent memory"""
         try:
             ollama_url = self.get_config('ollama_url', self.ollama_url)
-            ollama_model = self.get_config('ollama_model', self.ollama_model)
+            # Use specialized memory extraction model for better precision
+            ollama_model = self.get_config('memory_extraction_model', 'qwen2.5:3b')
 
             # Get current date for context
             from zoneinfo import ZoneInfo
@@ -951,7 +1067,7 @@ class MumbleAIBot:
             current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
 
             # Prompt to extract important information with stricter JSON format requirements
-            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
+            extraction_prompt = f"""Analyze this conversation and extract ONLY truly important information worth remembering long-term.
 
 CURRENT DATE: {current_date_str}
 
@@ -959,45 +1075,87 @@ User: "{user_message}"
 Assistant: "{assistant_response}"
 
 Categories:
-- schedule: appointments, meetings, events with dates/times
-- fact: personal information, preferences, relationships, details
-- task: things to do, reminders, action items
+- schedule: appointments, meetings, events with dates/times (must have specific date/time)
+- fact: personal information, preferences, relationships, important details
+- task: significant action items with lasting value (not immediate/temporary tasks)
 - preference: likes, dislikes, habits
 - other: other important information
 
-CRITICAL RULES:
-1. ONLY extract information that is actually mentioned and important
+CRITICAL RULES - BE VERY SELECTIVE:
+1. ONLY extract information that would be valuable to remember weeks or months from now
 2. Do NOT create entries with empty content
 3. If there's nothing important to remember, return an empty array: []
 4. You MUST respond with ONLY valid JSON, nothing else
-5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
-6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
-7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
-8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
-9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
+5. When in doubt, DO NOT extract - it's better to miss something than to save junk
 
-IMPORTANT: Query questions and confirmations should return empty array. Examples:
-- "What's on my schedule?" → []
-- "Tell me about my calendar" → []
-- "Do I have anything tomorrow?" → []
-- "What do I have next week?" → []
-- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
-- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
+DO NOT EXTRACT:
+- Immediate/temporary tasks (e.g., "get the bath going", "clean up", "turn on the light")
+- Conversational pleasantries (e.g., "good morning", "I'm excited", "feeling nervous")
+- Vague or incomplete statements (e.g., "follows boundaries", "review this", "clean up")
+- Meta-instructions about calendar (e.g., "make sure it's on your calendar", "review attachment")
+- Query questions (e.g., "What's on my schedule?", "Do I have anything tomorrow?")
+- Confirmations or reminders of existing events (e.g., "Your flight confirmation", "Reminder: appointment")
+- Tasks that are happening RIGHT NOW or within the next few hours
+- Emotional states or feelings unless medically significant
+- Fragments or partial sentences that lack context
+
+ONLY EXTRACT:
+- Schedule: Specific appointments/events with clear dates (e.g., "Doctor appointment next Tuesday 2pm")
+- Facts: Significant personal details (e.g., "Allergic to peanuts", "Works as IT Consultant at Acme Corp")
+- Tasks: Important action items with lasting value (e.g., "File taxes by April 15", "Renew passport")
+- Preferences: Meaningful preferences (e.g., "Prefers vegetarian meals", "Dislikes horror movies")
+
+SCHEDULE RULES:
+- DO NOT extract when user is ASKING about their schedule
+- ONLY extract when user is TELLING you about NEW events
+- DO NOT extract from confirmation emails or reminders
+- Must have specific details (who, what, when)
+- Must include date_expression and be parseable
+
+TASK RULES:
+- Task must have value beyond today
+- Must be specific and actionable
+- NO temporary household tasks (cleaning, cooking, bathing)
+- NO immediate requests (happening in next few hours)
+
+FACT RULES:
+- Must be objectively important personal information
+- NO conversational fluff or emotions
+- NO incomplete fragments
+- Must add value to future conversations
+
+EXAMPLES OF WHAT NOT TO EXTRACT:
+❌ "Wait for you to get in the bath" (immediate, temporary)
+❌ "Clean up" (vague, temporary)
+❌ "Review this and make sure it's on your calendar" (meta-instruction)
+❌ "Lovely morning! Feeling nervous..." (conversational fluff)
+❌ "follows boundaries that work for both of us" (fragment, vague)
+❌ "Baby showers" (too vague, no details)
+❌ "Travel Dates review" (vague, meta-instruction)
+❌ "What's on my schedule?" (query question)
+
+EXAMPLES OF WHAT TO EXTRACT:
+✅ {{"category": "schedule", "content": "Dr. Smith annual checkup", "importance": 7, "date_expression": "next Tuesday", "event_time": "14:00"}}
+✅ {{"category": "fact", "content": "Works as IT Consultant at Microsoft", "importance": 6}}
+✅ {{"category": "task", "content": "Renew driver's license before it expires in March", "importance": 8}}
+✅ {{"category": "preference", "content": "Prefers decaf coffee after 3pm", "importance": 4}}
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
 - Use date_expression field for the raw expression
 - Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
-- Include description in content field
+- Include specific description in content field (who, what)
 
 Format (return empty array if nothing important):
 [
-  {{"category": "schedule", "content": "Haircut appointment", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
-  {{"category": "fact", "content": "Likes tea over coffee", "importance": 4}}
+  {{"category": "schedule", "content": "Haircut appointment with Jane", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
+  {{"category": "fact", "content": "Allergic to shellfish", "importance": 8}}
 ]
 
 Valid categories: schedule, fact, task, preference, other
 Importance: 1-10 (1=low, 10=critical)
+
+REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
@@ -1298,17 +1456,22 @@ JSON:"""
                     return
 
                 # No duplicate found, insert new memory
+                # Generate embedding for semantic search
+                embedding = self.generate_embedding(content)
+                
                 cursor.execute(
                     """
                     INSERT INTO persistent_memories
-                    (user_name, category, content, session_id, importance, tags, event_date, event_time)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (user_name, category, content, session_id, importance, tags, event_date, event_time, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (user_name, category, content, session_id, importance, tags or [], event_date, event_time)
+                    (user_name, category, content, session_id, importance, tags or [], event_date, event_time, embedding)
                 )
                 conn.commit()
                 cursor.close()
-                logger.info(f"Saved new {category} memory for {user_name}")
+                # Invalidate cache since we added a new memory
+                self.smart_cache.invalidate_user(user_name)
+                logger.info(f"Saved new {category} memory for {user_name} with embedding")
         except Exception as e:
             logger.error(f"Error saving persistent memory: {e}")
             if conn:
@@ -1317,8 +1480,97 @@ JSON:"""
             if conn:
                 self.release_db_connection(conn)
 
+    def get_relevant_memories(self, query: str, user_name: str, top_k: int = 5) -> List[Dict]:
+        """Get most relevant memories using semantic similarity ranking"""
+        conn = None
+        try:
+            # Generate query embedding
+            query_embedding = self.generate_embedding(query)
+            if not query_embedding:
+                logger.warning("Failed to generate query embedding, falling back to basic retrieval")
+                return self.get_persistent_memories(user_name, limit=top_k)
+            
+            conn = self.get_db_connection()
+            if not conn:
+                return []
+            
+            cursor = conn.cursor()
+            
+            # Fetch all active memories with embeddings and calculate relevance
+            cursor.execute(
+                """
+                SELECT id, category, content, extracted_at, importance, tags, event_date, event_time, embedding
+                FROM persistent_memories
+                WHERE user_name = %s AND active = TRUE AND embedding IS NOT NULL
+                ORDER BY extracted_at DESC
+                """,
+                (user_name,)
+            )
+            
+            rows = cursor.fetchall()
+            memories_with_scores = []
+            
+            for row in rows:
+                memory_embedding = row[8] if len(row) > 8 else None
+                if memory_embedding:
+                    # Calculate cosine similarity
+                    similarity = self._cosine_similarity(query_embedding, memory_embedding)
+                    # Weight by importance (1-10) and relevance (0-1)
+                    # Combined score: relevance * (importance/10)
+                    importance = row[4] if len(row) > 4 else 5
+                    combined_score = similarity * (importance / 10.0)
+                    
+                    memories_with_scores.append({
+                        'id': row[0],
+                        'category': row[1],
+                        'content': row[2],
+                        'extracted_at': row[3],
+                        'importance': importance,
+                        'tags': row[5] if len(row) > 5 else [],
+                        'event_date': row[6] if len(row) > 6 else None,
+                        'event_time': row[7] if len(row) > 7 else None,
+                        'relevance_score': similarity,
+                        'combined_score': combined_score
+                    })
+            
+            # Sort by combined score
+            memories_with_scores.sort(key=lambda x: x['combined_score'], reverse=True)
+            
+            # Return top K
+            top_memories = memories_with_scores[:top_k]
+            logger.info(f"Retrieved {len(top_memories)} relevant memories for {user_name} (query: {query[:50]}...)")
+            
+            return top_memories
+            
+        except Exception as e:
+            logger.error(f"Error getting relevant memories: {e}")
+            return []
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+    
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors"""
+        if not vec1 or not vec2 or len(vec1) != len(vec2):
+            return 0.0
+        
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        magnitude1 = sum(a * a for a in vec1) ** 0.5
+        magnitude2 = sum(b * b for b in vec2) ** 0.5
+        
+        if magnitude1 == 0 or magnitude2 == 0:
+            return 0.0
+        
+        return dot_product / (magnitude1 * magnitude2)
+    
     def get_persistent_memories(self, user_name: str, category: str = None, limit: int = 20) -> List[Dict]:
-        """Retrieve persistent memories for a user"""
+        """Retrieve persistent memories for a user with caching"""
+        # Check cache first (only for basic retrieval without category)
+        if not category:
+            cached_memories = self.smart_cache.get_cached_memories(user_name)
+            if cached_memories is not None:
+                return cached_memories[:limit]
+        
         conn = None
         try:
             conn = self.get_db_connection()
@@ -1366,6 +1618,10 @@ JSON:"""
                     'event_time': row[7]
                 })
 
+            # Cache the memories if this was a basic retrieval
+            if not category:
+                self.smart_cache.cache_memories(user_name, memories)
+            
             return memories
 
         except Exception as e:
@@ -1941,44 +2197,218 @@ User: "What do I have next week?"
             return "Sorry, I am temporarily unavailable due to service issues."
 
     def _get_ollama_response_internal(self, text, user_name=None, session_id=None):
-        """Internal Ollama response method"""
+        """Internal Ollama response method with optional response validation"""
         # Get current Ollama config from database
         ollama_url = self.get_config('ollama_url', self.ollama_url)
         ollama_model = self.get_config('ollama_model', self.ollama_model)
+        use_validation = self.get_config('use_response_validation', 'false').lower() == 'true'
 
         # Build prompt with conversation history
         prompt = self.build_prompt_with_context(text, user_name, session_id)
 
-        response = requests.post(
-            f"{ollama_url}/api/generate",
-            json={
-                'model': ollama_model,
-                'prompt': prompt,
-                'stream': False,
-                'options': {
-                    'temperature': 0.7,  # Lower temperature for more consistent, focused responses
-                    'top_p': 0.9,  # Nucleus sampling for better quality
-                    'num_predict': 100,  # Limit response length (roughly 1-2 sentences)
-                    'stop': ['\n\n', 'User:', 'Assistant:']  # Stop at conversation breaks
-                }
-            },
-            timeout=60
-        )
+        max_attempts = 2 if use_validation else 1
+        for attempt in range(max_attempts):
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': prompt,
+                    'stream': False,
+                    'options': {
+                        'temperature': 0.7,  # Lower temperature for more consistent, focused responses
+                        'top_p': 0.9,  # Nucleus sampling for better quality
+                        'num_predict': 100,  # Limit response length (roughly 1-2 sentences)
+                        'stop': ['\n\n', 'User:', 'Assistant:']  # Stop at conversation breaks
+                    }
+                },
+                timeout=60
+            )
 
-        if response.status_code == 200:
-            return response.json().get('response', 'I did not understand that.')
+            if response.status_code == 200:
+                generated_response = response.json().get('response', 'I did not understand that.')
+                
+                # Validate response if enabled
+                if use_validation and attempt < max_attempts - 1:
+                    is_valid, reason = self.validate_response(generated_response, text, user_name)
+                    if is_valid:
+                        logger.debug(f"Response passed validation on attempt {attempt + 1}")
+                        return generated_response
+                    else:
+                        logger.warning(f"Response failed validation (attempt {attempt + 1}): {reason}")
+                        # Regenerate with stronger anti-hallucination prompt
+                        prompt += "\n\nIMPORTANT: Previous response was inaccurate. Only state facts you are certain about."
+                        continue
+                else:
+                    return generated_response
+            else:
+                raise requests.RequestException(f"Ollama request failed: {response.text}")
+        
+        # If we get here, all attempts failed validation
+        return "I apologize, but I want to make sure I give you accurate information. Could you rephrase your question?"
+
+    def analyze_query_complexity(self, message: str) -> str:
+        """Analyze if a query is complex or simple to determine prompting strategy"""
+        message_lower = message.lower().strip()
+        
+        # Complex query indicators
+        complex_indicators = [
+            # Multi-step reasoning
+            'why', 'how', 'explain', 'compare', 'difference between', 'what if',
+            # Planning/scheduling
+            'plan', 'schedule', 'arrange', 'organize',
+            # Analysis/evaluation
+            'should i', 'would it be', 'is it better', 'recommend',
+            # Multi-part questions
+            'and then', 'after that', 'first', 'second', 'finally',
+            # Conditional reasoning
+            'if', 'unless', 'provided that', 'in case'
+        ]
+        
+        # Count complexity indicators
+        complexity_score = sum(1 for indicator in complex_indicators if indicator in message_lower)
+        
+        # Also consider length (longer queries tend to be more complex)
+        word_count = len(message.split())
+        if word_count > 20:
+            complexity_score += 1
+        
+        # Classify complexity
+        if complexity_score >= 2:
+            return 'complex'
+        elif complexity_score == 1:
+            return 'moderate'
         else:
-            raise requests.RequestException(f"Ollama request failed: {response.text}")
+            return 'simple'
+    
+    def validate_response(self, response: str, user_message: str, user_name: str = None) -> Tuple[bool, str]:
+        """Validate AI response for accuracy and hallucination detection"""
+        try:
+            # Get known facts from memories
+            memories_context = ""
+            if user_name:
+                memories = self.get_persistent_memories(user_name, limit=5)
+                if memories:
+                    memories_context = "\n".join([f"- {mem['content']}" for mem in memories])
+            
+            # Build validation prompt
+            validation_prompt = f"""Review this AI response for accuracy and quality:
+
+User asked: {user_message}
+Bot responded: {response}
+
+Known facts about user:
+{memories_context if memories_context else "No specific facts stored"}
+
+Validation criteria:
+1. Is the response accurate based on known facts? (yes/no)
+2. Is the response helpful and relevant? (yes/no)
+3. Does the response avoid making up information? (yes/no)
+4. If mentioning schedules/dates, are they based on actual stored events? (yes/no/N/A)
+
+Answer ONLY with: VALID or INVALID
+Then on the next line, briefly explain why in 10 words or less.
+
+Format:
+VALID
+Reason: [brief explanation]
+
+or
+
+INVALID
+Reason: [brief explanation]"""
+
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('ollama_model', self.ollama_model)
+
+            validation_response = requests.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': validation_prompt,
+                    'stream': False,
+                    'options': {
+                        'temperature': 0.1,  # Very low temp for consistent validation
+                        'num_predict': 100
+                    }
+                },
+                timeout=15  # Shorter timeout for validation
+            )
+
+            if validation_response.status_code == 200:
+                validation_text = validation_response.json().get('response', '').strip().upper()
+                is_valid = 'VALID' in validation_text and 'INVALID' not in validation_text
+                
+                # Extract reason
+                lines = validation_response.json().get('response', '').strip().split('\n')
+                reason = ' '.join(lines[1:]) if len(lines) > 1 else validation_text
+                
+                logger.debug(f"Response validation: {'VALID' if is_valid else 'INVALID'} - {reason}")
+                return is_valid, reason
+            else:
+                logger.warning("Response validation failed, assuming valid")
+                return True, "Validation check failed"
+
+        except Exception as e:
+            logger.error(f"Error validating response: {e}")
+            # On error, assume valid to avoid blocking responses
+            return True, f"Validation error: {str(e)}"
+    
+    def is_schedule_query(self, message):
+        """Detect if user is asking about their schedule/calendar"""
+        schedule_keywords = [
+            'schedule', 'calendar', 'appointment', 'meeting', 'event',
+            'what do i have', 'what\'s on', 'do i have', 'am i free',
+            'busy', 'available', 'plans', 'what\'s coming up',
+            'tomorrow', 'today', 'tonight', 'next week', 'this week',
+            'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+            'when is', 'what time', 'upcoming'
+        ]
+        message_lower = message.lower()
+        return any(keyword in message_lower for keyword in schedule_keywords)
+
+    def extract_date_context(self, message):
+        """Extract date context from user query for smart filtering"""
+        message_lower = message.lower()
+
+        # Specific day queries
+        if any(word in message_lower for word in ['tomorrow']):
+            return 'tomorrow'
+        if any(word in message_lower for word in ['today', 'tonight']):
+            return 'today'
+        if 'next week' in message_lower or 'this week' in message_lower:
+            return 'week'
+        if 'next month' in message_lower or 'this month' in message_lower:
+            return 'month'
+
+        # Specific day names
+        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        for day in days:
+            if day in message_lower:
+                return day
+
+        # Default to full calendar view
+        return 'all'
 
     def build_prompt_with_context(self, current_message, user_name=None, session_id=None):
-        """Build a prompt with short-term (current session) and long-term (semantic) memory"""
+        """Build a prompt with short-term (current session) and long-term (semantic) memory, with intelligent context selection"""
         try:
+            # Detect query complexity for adaptive prompting
+            complexity = self.analyze_query_complexity(current_message)
+            use_chain_of_thought = self.get_config('use_chain_of_thought', 'false').lower() == 'true'
+            use_semantic_ranking = self.get_config('use_semantic_memory_ranking', 'true').lower() == 'true'
+
+            # Detect if this is a schedule-related query
+            is_schedule_related = self.is_schedule_query(current_message)
+            date_context = self.extract_date_context(current_message) if is_schedule_related else None
+
+            logger.debug(f"Query complexity: {complexity}, CoT: {use_chain_of_thought}, Semantic ranking: {use_semantic_ranking}, Schedule query: {is_schedule_related}, Date context: {date_context}")
+            
             # Get bot persona from config
             persona = self.get_config('bot_persona', '')
 
-            # Get memory limits from config
-            short_term_limit = int(self.get_config('short_term_memory_limit', '3'))
-            long_term_limit = int(self.get_config('long_term_memory_limit', '3'))
+            # Get memory limits from config (now defaulting to 10 instead of 3)
+            short_term_limit = int(self.get_config('short_term_memory_limit', '10'))
+            long_term_limit = int(self.get_config('long_term_memory_limit', '10'))
 
             # Build the full prompt
             full_prompt = ""
@@ -1989,8 +2419,21 @@ User: "What do I have next week?"
             current_date_str = current_datetime.strftime("%A, %B %d, %Y")
             current_time_str = current_datetime.strftime("%I:%M %p %Z")
 
+            # Add chain-of-thought prefix for complex queries
+            if use_chain_of_thought and complexity == 'complex':
+                full_prompt += f"""COMPLEX QUERY DETECTED - Use step-by-step reasoning:
+
+Question: {current_message}
+
+Before answering, think through:
+1. What information do I need to answer accurately?
+2. What relevant memories or schedule items should I check?
+3. What's the most helpful way to respond?
+
+"""
+
             # Add system instructions with anti-repetition and anti-hallucination guidance
-            full_prompt = f"""You are having a natural, flowing conversation. CRITICAL RULES - FOLLOW EXACTLY:
+            full_prompt += f"""You are having a natural, flowing conversation. CRITICAL RULES - FOLLOW EXACTLY:
 
 CURRENT DATE AND TIME (New York): {current_date_str} at {current_time_str}
 Use this information when answering questions about scheduling, planning, or time-sensitive topics.
@@ -2019,63 +2462,125 @@ SCHEDULING CAPABILITIES:
                 full_prompt += "IMPORTANT: Stay in character BUT prioritize truthfulness over role-playing. "
                 full_prompt += "If you don't have information, admit it rather than making something up to fit your character.\n\n"
 
-            # Get persistent memories (important saved information)
+            # Get persistent memories and schedule events (with parallel processing when enabled)
             persistent_memories = []
-            if user_name:
-                persistent_memories = self.get_persistent_memories(user_name, limit=10)
-                logger.info(f"Retrieved {len(persistent_memories)} persistent memories for {user_name}")
-
-            # Get schedule events for the user (next 30 days)
             schedule_events = []
+            
             if user_name:
-                from datetime import timedelta
-                end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
-                schedule_events = self.get_schedule_events(
-                    user_name=user_name,
-                    start_date=current_datetime.strftime('%Y-%m-%d'),
-                    end_date=end_date,
-                    limit=20
-                )
-                logger.info(f"Retrieved {len(schedule_events)} schedule events for {user_name}")
-
-            # Add schedule events to context - ALWAYS include this section
-            full_prompt += f"📅 {user_name.upper()}'S UPCOMING SCHEDULE (next 30 days from {current_datetime.strftime('%A, %B %d, %Y')}):\n"
-            if schedule_events:
-                for event in schedule_events:
-                    event_date_obj = event['event_date']
-                    event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
-                    event_time_str = str(event['event_time']) if event['event_time'] else "All day"
-                    importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
-                    full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
-                    if event['description']:
-                        full_prompt += f"   Details: {event['description']}\n"
-                full_prompt += "\n⚠️ CRITICAL SCHEDULE INSTRUCTIONS:\n"
-                full_prompt += "- These are the ONLY events scheduled. Do not mention any events not listed above.\n"
-                full_prompt += "- Use the EXACT dates shown. Do not guess or approximate dates.\n"
-                full_prompt += "- If asked about a specific time period, only mention events that fall within that period based on the dates shown.\n\n"
-            else:
-                full_prompt += "NO EVENTS SCHEDULED\n\n"
-                full_prompt += "⚠️ CRITICAL: The schedule is EMPTY. When asked about schedule/calendar:\n"
-                full_prompt += "- Say clearly: \"You don't have anything on your schedule\" or \"Your calendar is clear\"\n"
-                full_prompt += "- DO NOT make up events, appointments, or plans\n"
-                full_prompt += "- DO NOT suggest events that might exist\n"
-                full_prompt += "- DO NOT hallucinate schedule information\n\n"
-
-            # Add persistent memories to context
-            if persistent_memories:
-                full_prompt += "IMPORTANT SAVED INFORMATION (use this to answer questions accurately):\n"
-                for mem in persistent_memories:
-                    category_label = mem['category'].upper()
-                    # For schedule memories with date/time, format them specially
-                    if mem['category'] == 'schedule' and mem.get('event_date'):
-                        event_date_obj = mem['event_date']
-                        event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
-                        event_time_str = str(mem.get('event_time', 'all day'))
-                        full_prompt += f"[{category_label}] {mem['content']} (Date: {event_date_str}, Time: {event_time_str})\n"
+                enable_parallel = self.get_config('enable_parallel_processing', 'true').lower() == 'true'
+                
+                if enable_parallel:
+                    # Fetch memories and schedule in parallel for better performance
+                    def fetch_memories():
+                        if use_semantic_ranking:
+                            return self.get_relevant_memories(current_message, user_name, top_k=10)
+                        else:
+                            return self.get_persistent_memories(user_name, limit=10)
+                    
+                    def fetch_schedule():
+                        cached_schedule = self.smart_cache.get_cached_schedule(user_name)
+                        if cached_schedule is not None:
+                            return cached_schedule
+                        else:
+                            from datetime import timedelta
+                            end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
+                            events = self.get_schedule_events(
+                                user_name=user_name,
+                                start_date=current_datetime.strftime('%Y-%m-%d'),
+                                end_date=end_date,
+                                limit=20
+                            )
+                            self.smart_cache.cache_schedule(user_name, events)
+                            return events
+                    
+                    # Execute in parallel
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        memory_future = executor.submit(fetch_memories)
+                        schedule_future = executor.submit(fetch_schedule)
+                        
+                        persistent_memories = memory_future.result()
+                        schedule_events = schedule_future.result()
+                    
+                    logger.info(f"Retrieved {len(persistent_memories)} memories and {len(schedule_events)} events (parallel)")
+                else:
+                    # Sequential fetching (original behavior)
+                    if use_semantic_ranking:
+                        persistent_memories = self.get_relevant_memories(current_message, user_name, top_k=10)
+                        logger.info(f"Retrieved {len(persistent_memories)} relevant memories using semantic ranking")
                     else:
-                        full_prompt += f"[{category_label}] {mem['content']}\n"
+                        persistent_memories = self.get_persistent_memories(user_name, limit=10)
+                        logger.info(f"Retrieved {len(persistent_memories)} persistent memories")
+                    
+                    # Check cache first
+                    cached_schedule = self.smart_cache.get_cached_schedule(user_name)
+                    if cached_schedule is not None:
+                        schedule_events = cached_schedule
+                        logger.debug(f"Using cached schedule for {user_name}")
+                    else:
+                        from datetime import timedelta
+                        end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
+                        schedule_events = self.get_schedule_events(
+                            user_name=user_name,
+                            start_date=current_datetime.strftime('%Y-%m-%d'),
+                            end_date=end_date,
+                            limit=20
+                        )
+                        self.smart_cache.cache_schedule(user_name, schedule_events)
+                        logger.info(f"Retrieved {len(schedule_events)} schedule events")
+
+            # Add schedule events to context - ONLY when user asks about schedule
+            if is_schedule_related and schedule_events:
+                # Filter events based on date context
+                filtered_events = []
+
+                if date_context == 'today':
+                    today_str = current_datetime.strftime('%Y-%m-%d')
+                    filtered_events = [e for e in schedule_events if str(e['event_date']) == today_str]
+                    time_range = "TODAY"
+                elif date_context == 'tomorrow':
+                    from datetime import timedelta
+                    tomorrow = current_datetime + timedelta(days=1)
+                    tomorrow_str = tomorrow.strftime('%Y-%m-%d')
+                    filtered_events = [e for e in schedule_events if str(e['event_date']) == tomorrow_str]
+                    time_range = "TOMORROW"
+                elif date_context == 'week':
+                    from datetime import timedelta
+                    week_end = current_datetime + timedelta(days=7)
+                    filtered_events = [e for e in schedule_events if current_datetime.date() <= e['event_date'] <= week_end.date()]
+                    time_range = "THIS WEEK"
+                elif date_context in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                    filtered_events = [e for e in schedule_events if e['event_date'].strftime('%A').lower() == date_context]
+                    time_range = date_context.upper()
+                else:
+                    # Show all events (default)
+                    filtered_events = schedule_events
+                    time_range = "UPCOMING"
+
+                full_prompt += f"📅 {user_name.upper()}'S {time_range} SCHEDULE:\n"
+                if filtered_events:
+                    for event in filtered_events:
+                        event_date_obj = event['event_date']
+                        event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
+                        event_time_str = str(event['event_time']) if event['event_time'] else "All day"
+                        importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
+                        full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
+                        if event['description']:
+                            full_prompt += f"   Details: {event['description']}\n"
+                    full_prompt += "\n⚠️ Only mention events listed above. Use EXACT dates shown.\n\n"
+                else:
+                    full_prompt += f"NO EVENTS for {time_range}\n\n"
+            elif is_schedule_related and not schedule_events:
+                full_prompt += "📅 SCHEDULE: Empty - no events scheduled. Clearly tell the user their calendar is clear.\n\n"
+
+            # Add persistent memories to context (exclude schedule category - shown separately above)
+            non_schedule_memories = [mem for mem in persistent_memories if mem['category'] != 'schedule']
+            if non_schedule_memories:
+                full_prompt += "IMPORTANT SAVED INFORMATION:\n"
+                for mem in non_schedule_memories:
+                    category_label = mem['category'].upper()
+                    full_prompt += f"[{category_label}] {mem['content']}\n"
                     logger.debug(f"Adding memory to prompt: [{category_label}] {mem['content']}")
-                full_prompt += "\nUse this information to answer questions. If asked about schedules, tasks, or facts, refer to the saved information above.\n\n"
+                full_prompt += "\n"
 
             # Get short-term memory (current session)
             short_term_memory = []
@@ -2135,14 +2640,14 @@ SCHEDULING CAPABILITIES:
             response = requests.post(
                 f"{self.silero_url}/synthesize",
                 json={'text': text},
-                timeout=30
+                timeout=300  # 5 minutes for TTS generation
             )
         else:
             # Use Piper TTS (default)
             response = requests.post(
                 f"{self.piper_url}/synthesize",
                 json={'text': text},
-                timeout=30
+                timeout=300  # 5 minutes for TTS generation
             )
 
         if response.status_code == 200:
@@ -2388,6 +2893,23 @@ SCHEDULING CAPABILITIES:
             except Exception as e:
                 logger.error(f"Error stopping health server: {e}")
 
+    def check_mumble_connection(self):
+        """Check if Mumble connection is alive and reconnect if needed"""
+        try:
+            if not self.mumble or not hasattr(self.mumble, 'is_alive') or not self.mumble.is_alive():
+                logger.warning("Mumble connection lost, attempting to reconnect...")
+                try:
+                    self.connect()
+                    logger.info("Successfully reconnected to Mumble server")
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to reconnect to Mumble: {e}")
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"Error checking Mumble connection: {e}")
+            return False
+
     def run(self):
         """Main run loop with health monitoring and auto-recovery"""
         logger.info("Starting Mumble AI Bot")
@@ -2398,8 +2920,19 @@ SCHEDULING CAPABILITIES:
         # Wait for services
         self.wait_for_services()
 
-        # Connect to Mumble
-        self.connect()
+        # Connect to Mumble with retry
+        max_connection_attempts = 10
+        for attempt in range(max_connection_attempts):
+            try:
+                self.connect()
+                break
+            except Exception as e:
+                if attempt < max_connection_attempts - 1:
+                    logger.warning(f"Connection attempt {attempt + 1} failed, retrying in 5 seconds... ({e})")
+                    time.sleep(5)
+                else:
+                    logger.error(f"Failed to connect after {max_connection_attempts} attempts")
+                    raise
 
         # Start health server
         self.start_health_server()
@@ -2410,15 +2943,35 @@ SCHEDULING CAPABILITIES:
         health_thread = threading.Thread(target=self._health_monitor, daemon=True)
         health_thread.start()
 
-        # Keep running
+        # Keep running with connection monitoring
         try:
+            connection_check_interval = 30  # Check connection every 30 seconds
+            last_connection_check = time.time()
+            
             while True:
                 time.sleep(1)
+                
+                # Periodically check Mumble connection
+                current_time = time.time()
+                if current_time - last_connection_check > connection_check_interval:
+                    self.check_mumble_connection()
+                    last_connection_check = current_time
+                    
         except KeyboardInterrupt:
             logger.info("Shutting down...")
             self.stop_health_server()
             if self.mumble:
                 self.mumble.stop()
+        except Exception as e:
+            logger.error(f"Unexpected error in main loop: {e}", exc_info=True)
+            # Try to gracefully shutdown
+            try:
+                self.stop_health_server()
+                if self.mumble:
+                    self.mumble.stop()
+            except:
+                pass
+            raise
 
 
 if __name__ == '__main__':

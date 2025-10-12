@@ -19,3 +19,5 @@ ON CONFLICT (key) DO NOTHING;
 COMMENT ON COLUMN email_logs.attachments_count IS 'Number of attachments in the email';
 COMMENT ON COLUMN email_logs.attachments_metadata IS 'JSON array of attachment details (filename, size, type, analysis summary)';
 
+
+

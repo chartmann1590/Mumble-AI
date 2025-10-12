@@ -4,7 +4,7 @@ System design and component interaction documentation.
 
 ## Overview
 
-Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 10 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, and SIP phone integration.
+Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 13 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, SIP phone integration, and email communication.
 
 ## Component Diagram
 
@@ -21,7 +21,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │                        Application Layer                                      │
 │  ┌──────────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │
 │  │  Mumble Server   │  │ SIP Bridge   │  │ Web Control  │  │ Mumble Web  │  │
-│  │   (Port 64738)   │  │(Port 5060)   │  │   Panel      │  │  Client     │  │
+│  │   (Port 48000)   │  │(Port 5060)   │  │   Panel      │  │  Client     │  │
 │  └─────────┬────────┘  └──────┬───────┘  │(Port 5002)   │  │(Port 8081)  │  │
 │            │                  │          └──────────────┘  └─────────────┘  │
 │       ┌────▼──────┐           │                                            │
@@ -36,11 +36,11 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │  │ Whisper  │  │  TTS   │  │(External│  │              │  │   Simple    │  │
 │  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │(Build Only) │  │
 │  └──────────┘  └────────┘  └─────────┘  └──────────────┘  └─────────────┘  │
-│  ┌──────────┐                                             ┌─────────────┐  │
-│  │ Silero   │                                             │ TTS Voice   │  │
-│  │  TTS     │                                             │ Generator   │  │
-│  │(Port5004)│                                             │(Port 5003)  │  │
-│  └──────────┘                                             └─────────────┘  │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  ┌─────┐ │
+│  │ Silero   │  │ Chatterbox   │  │ Email Summary│  │ TTS Voice   │  │Email│ │
+│  │  TTS     │  │     TTS      │  │   Service    │  │ Generator   │  │System│ │
+│  │(Port5004)│  │ (Port 5005)  │  │ (Port 5006)  │  │(Port 5003)  │  │     │ │
+│  └──────────┘  └──────────────┘  └──────────────┘  └─────────────┘  └─────┘ │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,12 +192,15 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 ### 9. TTS Voice Generator
 
 - **Image:** Custom (Python 3.11 + Flask)
-- **Purpose:** Standalone TTS voice generation web interface
+- **Purpose:** Standalone TTS voice generation and cloning web interface
 - **Port:** 5003
+- **Dependencies:** Piper TTS, Silero TTS, Chatterbox TTS, PostgreSQL
 - **Features:**
-  - Dual TTS engine support (Piper and Silero)
+  - Triple TTS engine support (Piper, Silero, and Chatterbox)
+  - Voice cloning with XTTS-v2
   - Modern responsive web interface
   - Voice preview and filtering
+  - Voice library management
   - Audio file download
   - Independent operation
 
@@ -212,7 +215,35 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Voice activity detection
   - Modern responsive UI
 
-### 11. Mumble Web Simple
+### 11. Chatterbox TTS
+
+- **Image:** Custom (Python 3.11)
+- **Purpose:** Voice cloning text-to-speech synthesis
+- **Port:** 5005
+- **Model:** XTTS-v2
+- **API:** POST /api/tts, GET /health, GET /api/voices
+- **Features:**
+  - Voice cloning with 10 seconds of reference audio
+  - Multi-language support (16 languages)
+  - GPU acceleration support
+  - High-quality neural voice synthesis
+  - Voice library management
+
+### 12. Email Summary Service
+
+- **Image:** Custom (Python 3.11)
+- **Purpose:** Email processing and daily summaries
+- **Port:** 5006
+- **Dependencies:** PostgreSQL, Ollama
+- **Features:**
+  - IMAP/SMTP email integration
+  - Daily conversation summaries
+  - Email reminders and notifications
+  - Attachment processing (images, PDFs, Word docs)
+  - Vision AI integration for image analysis
+  - Thread-aware email conversations
+
+### 13. Mumble Web Simple
 
 - **Image:** Custom (Node.js build)
 - **Purpose:** Simplified web client (build only)
@@ -248,7 +279,69 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 - `ollama_url` - Ollama server URL
 - `ollama_model` - Active model name
 - `piper_voice` - Active TTS voice
+- `silero_voice` - Active Silero TTS voice
+- `chatterbox_voice` - Active Chatterbox TTS voice
+- `tts_engine` - Selected TTS engine (piper/silero/chatterbox)
 - `bot_persona` - Personality description
+- `whisper_language` - Whisper language setting
+- `vision_model` - Vision AI model for email attachments
+- `memory_model` - Model for memory extraction
+
+### persistent_memories
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| user_name | VARCHAR(255) | User who created the memory |
+| memory_text | TEXT | Memory content |
+| category | VARCHAR(50) | Memory category |
+| importance | INTEGER | Importance level (1-10) |
+| event_date | DATE | Optional event date |
+| event_time | TIME | Optional event time |
+| created_at | TIMESTAMP | When memory was created |
+| embedding | VECTOR(1536) | Semantic embedding for search |
+
+### email_settings
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| smtp_server | VARCHAR(255) | SMTP server address |
+| smtp_port | INTEGER | SMTP port |
+| imap_server | VARCHAR(255) | IMAP server address |
+| imap_port | INTEGER | IMAP port |
+| username | VARCHAR(255) | Email username |
+| password | VARCHAR(255) | Email password (encrypted) |
+| enabled | BOOLEAN | Whether email is enabled |
+| daily_summary_time | TIME | Time for daily summaries |
+| created_at | TIMESTAMP | When settings were created |
+
+### email_logs
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| email_id | VARCHAR(255) | Email message ID |
+| direction | VARCHAR(10) | 'incoming' or 'outgoing' |
+| from_email | VARCHAR(255) | Sender email |
+| to_email | VARCHAR(255) | Recipient email |
+| subject | TEXT | Email subject |
+| content | TEXT | Email content |
+| status | VARCHAR(20) | Processing status |
+| error_message | TEXT | Error details if failed |
+| created_at | TIMESTAMP | When email was processed |
+
+### chatterbox_voices
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| voice_name | VARCHAR(255) | Voice name |
+| description | TEXT | Voice description |
+| reference_audio_path | VARCHAR(500) | Path to reference audio |
+| language | VARCHAR(10) | Voice language |
+| created_at | TIMESTAMP | When voice was created |
+| is_deleted | BOOLEAN | Soft delete flag |
 
 ## Audio Processing
 
@@ -258,11 +351,12 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 - Converted to WAV for Whisper
 - Transcription happens after silence threshold
 
-### Output Audio (Piper → Mumble)
-- Piper outputs: 22050Hz mono
-- FFmpeg resamples to: 48000Hz mono 16-bit
-- Format required by Mumble protocol
-- Prevents chipmunk voice effect
+### Output Audio (TTS → Mumble)
+- **Piper TTS:** 22050Hz mono → resampled to 48000Hz mono 16-bit
+- **Silero TTS:** 22050Hz mono → resampled to 48000Hz mono 16-bit  
+- **Chatterbox TTS:** 22050Hz mono → resampled to 48000Hz mono 16-bit
+- **Format:** 48000Hz mono 16-bit (required by Mumble protocol)
+- **Processing:** FFmpeg resampling prevents chipmunk voice effect
 
 ## Security Considerations
 

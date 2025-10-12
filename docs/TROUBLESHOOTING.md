@@ -338,6 +338,181 @@ docker-compose restart piper-tts web-control-panel
 
 ## New Service Issues
 
+### Chatterbox TTS Issues
+
+#### Voice Cloning Not Working
+
+**Symptom:** Chatterbox TTS fails to clone voices or generate speech
+
+**Solutions:**
+```bash
+# Check Chatterbox TTS logs
+docker-compose logs -f chatterbox-tts
+
+# Verify GPU availability
+docker exec chatterbox-tts nvidia-smi
+
+# Check model download
+docker exec chatterbox-tts ls -la /app/models/
+
+# Test API directly
+curl -X POST http://localhost:5005/api/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello world", "speaker_wav":"/path/to/audio.wav"}'
+```
+
+#### Slow Voice Generation
+
+**Symptom:** Chatterbox TTS takes too long to generate speech
+
+**Solutions:**
+```bash
+# Check if using GPU
+docker logs chatterbox-tts | grep "device"
+
+# Switch to CPU if GPU issues
+# Edit .env file
+DEVICE=cpu
+
+# Restart service
+docker-compose restart chatterbox-tts
+```
+
+#### Voice Quality Issues
+
+**Symptom:** Cloned voices sound distorted or unclear
+
+**Solutions:**
+```bash
+# Check reference audio quality
+# Ensure reference audio is:
+# - At least 10 seconds long
+# - Clear speech without background noise
+# - Mono audio format
+# - 22050Hz sample rate
+
+# Test with different reference audio
+# Use high-quality recording equipment
+```
+
+### Email Summary Service Issues
+
+#### Emails Not Being Processed
+
+**Symptom:** Email service not checking or processing emails
+
+**Solutions:**
+```bash
+# Check email service logs
+docker-compose logs -f email-summary-service
+
+# Verify email settings in web control panel
+# Go to http://localhost:5002 and check email configuration
+
+# Test email connectivity
+docker exec email-summary-service python -c "
+import imaplib
+import smtplib
+# Test IMAP connection
+# Test SMTP connection
+"
+
+# Check if email is enabled
+docker exec email-summary-service python -c "
+from app import get_db_connection
+conn = get_db_connection()
+cur = conn.cursor()
+cur.execute('SELECT enabled FROM email_settings LIMIT 1')
+print(cur.fetchone())
+"
+```
+
+#### Daily Summaries Not Sending
+
+**Symptom:** Daily email summaries are not being sent
+
+**Solutions:**
+```bash
+# Check email service logs
+docker-compose logs -f email-summary-service | grep "summary"
+
+# Verify summary time setting
+# Check web control panel for daily summary time
+
+# Test manual summary generation
+curl -X POST http://localhost:5006/process_emails
+
+# Check email logs in database
+docker exec email-summary-service python -c "
+from app import get_db_connection
+conn = get_db_connection()
+cur = conn.cursor()
+cur.execute('SELECT * FROM email_logs ORDER BY created_at DESC LIMIT 5')
+print(cur.fetchall())
+"
+```
+
+#### Attachment Processing Issues
+
+**Symptom:** Email attachments are not being processed or analyzed
+
+**Solutions:**
+```bash
+# Check vision model availability
+curl http://localhost:11434/api/tags | grep moondream
+
+# Verify vision model configuration
+# Check web control panel for vision model settings
+
+# Test vision model directly
+curl -X POST http://localhost:11434/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"model":"moondream","prompt":"Describe this image","images":["base64_image_data"]}'
+
+# Check attachment processing logs
+docker-compose logs -f email-summary-service | grep "attachment"
+```
+
+### TTS Voice Generator Issues
+
+#### Voice Generator Not Loading
+
+**Symptom:** TTS Voice Generator web interface not accessible
+
+**Solutions:**
+```bash
+# Check TTS Voice Generator logs
+docker-compose logs -f tts-web-interface
+
+# Verify port 5003 is available
+netstat -an | grep 5003
+
+# Check service dependencies
+docker-compose ps | grep -E "(piper-tts|silero-tts|chatterbox-tts)"
+
+# Restart service
+docker-compose restart tts-web-interface
+```
+
+#### Voice Cloning Upload Fails
+
+**Symptom:** Cannot upload audio files for voice cloning
+
+**Solutions:**
+```bash
+# Check file size limits
+# Ensure audio file is under 10MB
+
+# Verify audio format
+# Supported formats: WAV, MP3, M4A, FLAC
+
+# Check Chatterbox TTS service
+docker-compose logs -f chatterbox-tts
+
+# Test with different audio file
+# Use high-quality, clear speech recording
+```
+
 ### SIP Bridge Issues
 
 #### SIP Call Not Answered

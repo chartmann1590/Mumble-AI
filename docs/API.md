@@ -9,6 +9,8 @@ Complete API documentation for all Mumble AI Bot services.
 - [Faster Whisper API](#faster-whisper-api) (Port 5000)
 - [Piper TTS API](#piper-tts-api) (Port 5001)
 - [Silero TTS API](#silero-tts-api) (Port 5004)
+- [Chatterbox TTS API](#chatterbox-tts-api) (Port 5005)
+- [Email Summary Service API](#email-summary-service-api) (Port 5006)
 - [SIP Bridge](#sip-bridge) (Port 5060)
 - [Mumble Web Client](#mumble-web-client) (Port 8081)
 
@@ -19,9 +21,20 @@ Base URL: `http://localhost:5002`
 ### Table of Contents
 - [Statistics](#statistics)
 - [Ollama Configuration](#ollama-configuration)
+- [Vision Model Configuration](#vision-model-configuration)
+- [Memory Model Configuration](#memory-model-configuration)
 - [Piper TTS](#piper-tts)
+- [Silero TTS](#silero-tts)
+- [Chatterbox TTS](#chatterbox-tts)
+- [TTS Engine Selection](#tts-engine-selection)
 - [Bot Persona](#bot-persona)
 - [Conversation History](#conversation-history)
+- [Persistent Memories](#persistent-memories)
+- [Email Settings](#email-settings)
+- [Email Mappings](#email-mappings)
+- [Email Logs](#email-logs)
+- [Schedule Management](#schedule-management)
+- [Advanced Settings](#advanced-settings)
 
 ## Statistics
 
@@ -759,6 +772,167 @@ Alternative text-to-speech synthesis service using Silero TTS.
 - Supports GPU acceleration when available
 - Returns high-quality WAV audio
 - Audio is automatically cleaned up after sending
+
+## Chatterbox TTS API
+
+Base URL: `http://localhost:5005`
+
+Voice cloning text-to-speech synthesis service using XTTS-v2 model.
+
+### Health Check
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "device": "cuda",
+  "gpu_available": true,
+  "model_loaded": true
+}
+```
+
+### Synthesize Speech with Voice Cloning
+
+**Endpoint:** `POST /api/tts`
+
+**Request Body:**
+```json
+{
+  "text": "Text to synthesize into speech",
+  "speaker_wav": "path/to/reference/audio.wav"
+}
+```
+
+**Parameters:**
+- `text` (required): Text to synthesize
+- `speaker_wav` (required): Path to reference audio file or base64 encoded audio
+
+**Response:** Audio file (WAV format)
+
+**Headers:**
+- `Content-Type: audio/wav`
+- `Content-Disposition: attachment; filename=speech.wav`
+
+### Get Available Models
+
+**Endpoint:** `GET /api/models`
+
+**Response:**
+```json
+{
+  "models": [
+    {
+      "name": "XTTS-v2",
+      "version": "2.0.2",
+      "languages": ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]
+    }
+  ]
+}
+```
+
+### Get Saved Voices
+
+**Endpoint:** `GET /api/voices`
+
+**Response:**
+```json
+{
+  "voices": [
+    {
+      "id": 1,
+      "voice_name": "My Custom Voice",
+      "description": "A custom cloned voice",
+      "language": "en",
+      "created_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+### Get Service Info
+
+**Endpoint:** `GET /api/info`
+
+**Response:**
+```json
+{
+  "service": "Chatterbox TTS",
+  "version": "1.0.0",
+  "model": "XTTS-v2",
+  "supported_languages": 16,
+  "features": [
+    "voice_cloning",
+    "multi_language",
+    "gpu_acceleration",
+    "high_quality"
+  ]
+}
+```
+
+**Features:**
+- Voice cloning with just 10 seconds of reference audio
+- Multi-language support (16 languages)
+- GPU acceleration for fast synthesis
+- High-quality neural voice synthesis
+- Voice library management
+
+## Email Summary Service API
+
+Base URL: `http://localhost:5006`
+
+Email processing and daily summary service.
+
+### Health Check
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "email_enabled": true,
+  "last_check": "2024-01-15T10:30:00Z"
+}
+```
+
+### Process Emails
+
+**Endpoint:** `POST /process_emails`
+
+**Description:** Manually trigger email processing
+
+**Response:**
+```json
+{
+  "status": "success",
+  "emails_processed": 5,
+  "summaries_sent": 2
+}
+```
+
+### Get Email Statistics
+
+**Endpoint:** `GET /stats`
+
+**Response:**
+```json
+{
+  "total_emails": 150,
+  "emails_today": 12,
+  "summaries_sent": 8,
+  "last_processing": "2024-01-15T10:30:00Z"
+}
+```
+
+**Features:**
+- IMAP/SMTP email integration
+- Daily conversation summaries
+- Email reminders and notifications
+- Attachment processing (images, PDFs, Word docs)
+- Vision AI integration for image analysis
+- Thread-aware email conversations
 
 ## SIP Bridge
 

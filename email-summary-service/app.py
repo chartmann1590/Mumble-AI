@@ -1367,15 +1367,15 @@ Keep it concise and friendly. Use markdown formatting:"""
             current_datetime = datetime.now(ny_tz)
             current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
 
-            # Get Ollama model from database
+            # Get memory extraction model from database (use specialized model for better precision)
             conn = self.get_db_connection()
             with conn.cursor() as cursor:
-                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'memory_extraction_model'")
                 row = cursor.fetchone()
-                ollama_model = row[0] if row else 'llama3.2:latest'
+                ollama_model = row[0] if row else 'qwen2.5:3b'
 
             # Prompt to extract important information with stricter JSON format requirements
-            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
+            extraction_prompt = f"""Analyze this conversation and extract ONLY truly important information worth remembering long-term.
 
 CURRENT DATE: {current_date_str}
 
@@ -1383,45 +1383,87 @@ User: "{user_message}"
 Assistant: "{assistant_response}"
 
 Categories:
-- schedule: appointments, meetings, events with dates/times
-- fact: personal information, preferences, relationships, details
-- task: things to do, reminders, action items
+- schedule: appointments, meetings, events with dates/times (must have specific date/time)
+- fact: personal information, preferences, relationships, important details
+- task: significant action items with lasting value (not immediate/temporary tasks)
 - preference: likes, dislikes, habits
 - other: other important information
 
-CRITICAL RULES:
-1. ONLY extract information that is actually mentioned and important
+CRITICAL RULES - BE VERY SELECTIVE:
+1. ONLY extract information that would be valuable to remember weeks or months from now
 2. Do NOT create entries with empty content
 3. If there's nothing important to remember, return an empty array: []
 4. You MUST respond with ONLY valid JSON, nothing else
-5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
-6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
-7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
-8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
-9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
+5. When in doubt, DO NOT extract - it's better to miss something than to save junk
 
-IMPORTANT: Query questions and confirmations should return empty array. Examples:
-- "What's on my schedule?" → []
-- "Tell me about my calendar" → []
-- "Do I have anything tomorrow?" → []
-- "What do I have next week?" → []
-- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
-- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
+DO NOT EXTRACT:
+- Immediate/temporary tasks (e.g., "get the bath going", "clean up", "turn on the light")
+- Conversational pleasantries (e.g., "good morning", "I'm excited", "feeling nervous")
+- Vague or incomplete statements (e.g., "follows boundaries", "review this", "clean up")
+- Meta-instructions about calendar (e.g., "make sure it's on your calendar", "review attachment")
+- Query questions (e.g., "What's on my schedule?", "Do I have anything tomorrow?")
+- Confirmations or reminders of existing events (e.g., "Your flight confirmation", "Reminder: appointment")
+- Tasks that are happening RIGHT NOW or within the next few hours
+- Emotional states or feelings unless medically significant
+- Fragments or partial sentences that lack context
+
+ONLY EXTRACT:
+- Schedule: Specific appointments/events with clear dates (e.g., "Doctor appointment next Tuesday 2pm")
+- Facts: Significant personal details (e.g., "Allergic to peanuts", "Works as IT Consultant at Acme Corp")
+- Tasks: Important action items with lasting value (e.g., "File taxes by April 15", "Renew passport")
+- Preferences: Meaningful preferences (e.g., "Prefers vegetarian meals", "Dislikes horror movies")
+
+SCHEDULE RULES:
+- DO NOT extract when user is ASKING about their schedule
+- ONLY extract when user is TELLING you about NEW events
+- DO NOT extract from confirmation emails or reminders
+- Must have specific details (who, what, when)
+- Must include date_expression and be parseable
+
+TASK RULES:
+- Task must have value beyond today
+- Must be specific and actionable
+- NO temporary household tasks (cleaning, cooking, bathing)
+- NO immediate requests (happening in next few hours)
+
+FACT RULES:
+- Must be objectively important personal information
+- NO conversational fluff or emotions
+- NO incomplete fragments
+- Must add value to future conversations
+
+EXAMPLES OF WHAT NOT TO EXTRACT:
+❌ "Wait for you to get in the bath" (immediate, temporary)
+❌ "Clean up" (vague, temporary)
+❌ "Review this and make sure it's on your calendar" (meta-instruction)
+❌ "Lovely morning! Feeling nervous..." (conversational fluff)
+❌ "follows boundaries that work for both of us" (fragment, vague)
+❌ "Baby showers" (too vague, no details)
+❌ "Travel Dates review" (vague, meta-instruction)
+❌ "What's on my schedule?" (query question)
+
+EXAMPLES OF WHAT TO EXTRACT:
+✅ {{"category": "schedule", "content": "Dr. Smith annual checkup", "importance": 7, "date_expression": "next Tuesday", "event_time": "14:00"}}
+✅ {{"category": "fact", "content": "Works as IT Consultant at Microsoft", "importance": 6}}
+✅ {{"category": "task", "content": "Renew driver's license before it expires in March", "importance": 8}}
+✅ {{"category": "preference", "content": "Prefers decaf coffee after 3pm", "importance": 4}}
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
 - Use date_expression field for the raw expression
 - Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
-- Include description in content field
+- Include specific description in content field (who, what)
 
 Format (return empty array if nothing important):
 [
-  {{"category": "schedule", "content": "Haircut appointment", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
-  {{"category": "fact", "content": "Likes tea over coffee", "importance": 4}}
+  {{"category": "schedule", "content": "Haircut appointment with Jane", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
+  {{"category": "fact", "content": "Allergic to shellfish", "importance": 8}}
 ]
 
 Valid categories: schedule, fact, task, preference, other
 Importance: 1-10 (1=low, 10=critical)
+
+REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
@@ -2058,60 +2100,102 @@ User: "What do I have next week?"
             current_datetime = datetime.now(ny_tz)
             current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
 
-            # Get Ollama model from database
+            # Get memory extraction model from database (use specialized model for better precision)
             conn = self.get_db_connection()
             with conn.cursor() as cursor:
-                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'memory_extraction_model'")
                 row = cursor.fetchone()
-                ollama_model = row[0] if row else 'llama3.2:latest'
+                ollama_model = row[0] if row else 'qwen2.5:3b'
 
             # Same extraction prompt as extract_and_save_memory
-            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
+            extraction_prompt = f"""Analyze this conversation and extract ONLY truly important information worth remembering long-term.
 
 CURRENT DATE: {current_date_str}
 
 User: "{user_message}"
 
 Categories:
-- schedule: appointments, meetings, events with dates/times
-- fact: personal information, preferences, relationships, details
-- task: things to do, reminders, action items
+- schedule: appointments, meetings, events with dates/times (must have specific date/time)
+- fact: personal information, preferences, relationships, important details
+- task: significant action items with lasting value (not immediate/temporary tasks)
 - preference: likes, dislikes, habits
 - other: other important information
 
-CRITICAL RULES:
-1. ONLY extract information that is actually mentioned and important
+CRITICAL RULES - BE VERY SELECTIVE:
+1. ONLY extract information that would be valuable to remember weeks or months from now
 2. Do NOT create entries with empty content
 3. If there's nothing important to remember, return an empty array: []
 4. You MUST respond with ONLY valid JSON, nothing else
-5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
-6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
-7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
-8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
-9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
+5. When in doubt, DO NOT extract - it's better to miss something than to save junk
 
-IMPORTANT: Query questions and confirmations should return empty array. Examples:
-- "What's on my schedule?" → []
-- "Tell me about my calendar" → []
-- "Do I have anything tomorrow?" → []
-- "What do I have next week?" → []
-- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
-- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
+DO NOT EXTRACT:
+- Immediate/temporary tasks (e.g., "get the bath going", "clean up", "turn on the light")
+- Conversational pleasantries (e.g., "good morning", "I'm excited", "feeling nervous")
+- Vague or incomplete statements (e.g., "follows boundaries", "review this", "clean up")
+- Meta-instructions about calendar (e.g., "make sure it's on your calendar", "review attachment")
+- Query questions (e.g., "What's on my schedule?", "Do I have anything tomorrow?")
+- Confirmations or reminders of existing events (e.g., "Your flight confirmation", "Reminder: appointment")
+- Tasks that are happening RIGHT NOW or within the next few hours
+- Emotional states or feelings unless medically significant
+- Fragments or partial sentences that lack context
+
+ONLY EXTRACT:
+- Schedule: Specific appointments/events with clear dates (e.g., "Doctor appointment next Tuesday 2pm")
+- Facts: Significant personal details (e.g., "Allergic to peanuts", "Works as IT Consultant at Acme Corp")
+- Tasks: Important action items with lasting value (e.g., "File taxes by April 15", "Renew passport")
+- Preferences: Meaningful preferences (e.g., "Prefers vegetarian meals", "Dislikes horror movies")
+
+SCHEDULE RULES:
+- DO NOT extract when user is ASKING about their schedule
+- ONLY extract when user is TELLING you about NEW events
+- DO NOT extract from confirmation emails or reminders
+- Must have specific details (who, what, when)
+- Must include date_expression and be parseable
+
+TASK RULES:
+- Task must have value beyond today
+- Must be specific and actionable
+- NO temporary household tasks (cleaning, cooking, bathing)
+- NO immediate requests (happening in next few hours)
+
+FACT RULES:
+- Must be objectively important personal information
+- NO conversational fluff or emotions
+- NO incomplete fragments
+- Must add value to future conversations
+
+EXAMPLES OF WHAT NOT TO EXTRACT:
+❌ "Wait for you to get in the bath" (immediate, temporary)
+❌ "Clean up" (vague, temporary)
+❌ "Review this and make sure it's on your calendar" (meta-instruction)
+❌ "Lovely morning! Feeling nervous..." (conversational fluff)
+❌ "follows boundaries that work for both of us" (fragment, vague)
+❌ "Baby showers" (too vague, no details)
+❌ "Travel Dates review" (vague, meta-instruction)
+❌ "What's on my schedule?" (query question)
+
+EXAMPLES OF WHAT TO EXTRACT:
+✅ {{"category": "schedule", "content": "Dr. Smith annual checkup", "importance": 7, "date_expression": "next Tuesday", "event_time": "14:00"}}
+✅ {{"category": "fact", "content": "Works as IT Consultant at Microsoft", "importance": 6}}
+✅ {{"category": "task", "content": "Renew driver's license before it expires in March", "importance": 8}}
+✅ {{"category": "preference", "content": "Prefers decaf coffee after 3pm", "importance": 4}}
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
 - Use date_expression field for the raw expression
 - Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
-- Include description in content field
+- Include specific description in content field (who, what)
 
 Format (return empty array if nothing important):
 [
-  {{"category": "schedule", "content": "Haircut appointment", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
-  {{"category": "fact", "content": "Likes tea over coffee", "importance": 4}}
+  {{"category": "schedule", "content": "Haircut appointment with Jane", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
+  {{"category": "fact", "content": "Allergic to shellfish", "importance": 8}}
 ]
 
 Valid categories: schedule, fact, task, preference, other
 Importance: 1-10 (1=low, 10=critical)
+
+REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
@@ -3049,28 +3133,52 @@ User: "What's on my schedule?"
             # Build context sections
             current_datetime = datetime.now(pytz.timezone(settings.get('timezone', 'America/New_York')))
 
-            # Memories section
+            # Memories section (exclude schedule category - shown separately)
             memory_context = ""
             if memories:
-                memory_context = "\n📝 RELEVANT MEMORIES:\n"
-                category_icons = {'schedule': '📅', 'fact': '💡', 'task': '✓', 'preference': '❤️', 'reminder': '⏰', 'other': '📌'}
-                for mem in memories:
-                    icon = category_icons.get(mem['category'], '📌')
-                    memory_context += f"{icon} [{mem['category'].upper()}] {mem['content']}\n"
-                memory_context += "\n"
+                non_schedule_memories = [mem for mem in memories if mem['category'] != 'schedule']
+                if non_schedule_memories:
+                    memory_context = "\n📝 RELEVANT MEMORIES:\n"
+                    category_icons = {'fact': '💡', 'task': '✓', 'preference': '❤️', 'reminder': '⏰', 'other': '📌'}
+                    for mem in non_schedule_memories:
+                        icon = category_icons.get(mem['category'], '📌')
+                        memory_context += f"{icon} [{mem['category'].upper()}] {mem['content']}\n"
+                    memory_context += "\n"
 
-            # Schedule section
+            # Schedule section with smart date filtering
             schedule_context = ""
             if schedule_events:
-                schedule_context = f"\n📅 UPCOMING SCHEDULE (next 30 days from {current_datetime.strftime('%A, %B %d, %Y')}):\n"
-                for event in schedule_events:
-                    event_date_str = event['event_date'].strftime('%A, %B %d, %Y') if hasattr(event['event_date'], 'strftime') else str(event['event_date'])
-                    event_time_str = str(event['event_time']) if event['event_time'] else "All day"
-                    importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
-                    schedule_context += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
-                    if event['description']:
-                        schedule_context += f"   Details: {event['description']}\n"
-                schedule_context += "\n"
+                # Extract date context from email body
+                body_lower = body.lower()
+                filtered_events = schedule_events  # Default to all events
+                time_range = "UPCOMING"
+
+                if 'today' in body_lower or 'tonight' in body_lower:
+                    today_str = current_datetime.strftime('%Y-%m-%d')
+                    filtered_events = [e for e in schedule_events if str(e['event_date']) == today_str]
+                    time_range = "TODAY"
+                elif 'tomorrow' in body_lower:
+                    tomorrow = current_datetime + timedelta(days=1)
+                    tomorrow_str = tomorrow.strftime('%Y-%m-%d')
+                    filtered_events = [e for e in schedule_events if str(e['event_date']) == tomorrow_str]
+                    time_range = "TOMORROW"
+                elif 'next week' in body_lower or 'this week' in body_lower:
+                    week_end = current_datetime + timedelta(days=7)
+                    filtered_events = [e for e in schedule_events if current_datetime.date() <= e['event_date'] <= week_end.date()]
+                    time_range = "THIS WEEK"
+
+                schedule_context = f"\n📅 {time_range} SCHEDULE:\n"
+                if filtered_events:
+                    for event in filtered_events:
+                        event_date_str = event['event_date'].strftime('%A, %B %d, %Y') if hasattr(event['event_date'], 'strftime') else str(event['event_date'])
+                        event_time_str = str(event['event_time']) if event['event_time'] else "All day"
+                        importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
+                        schedule_context += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
+                        if event['description']:
+                            schedule_context += f"   Details: {event['description']}\n"
+                    schedule_context += "\n"
+                else:
+                    schedule_context = f"\n📅 SCHEDULE: No events for {time_range}\n\n"
             else:
                 schedule_context = f"\n📅 SCHEDULE: No upcoming events scheduled\n\n"
 

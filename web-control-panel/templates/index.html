@@ -420,6 +420,26 @@
                 <button onclick="refreshVisionModels()" style="margin-left: 10px; background: #3498db;">Refresh Models</button>
             </div>
 
+            <!-- Memory Extraction Model Configuration -->
+            <div class="panel">
+                <h2>🧠 Memory Extraction Model</h2>
+                <div class="success-message" id="memory-model-success">Settings saved successfully!</div>
+                <p style="color: #7f8c8d; font-size: 0.9em; margin-top: 0;">
+                    Specialized model for extracting facts, schedules, and tasks from conversations.
+                    Smaller models like <strong>qwen2.5:3b</strong> or <strong>llama3.2:3b</strong> are recommended for better precision and speed.
+                </p>
+
+                <div class="form-group">
+                    <label for="memory-model">Memory Extraction Model</label>
+                    <select id="memory-model">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <button onclick="saveMemoryModelConfig()">Save Memory Model</button>
+                <button onclick="refreshMemoryModels()" style="margin-left: 10px; background: #3498db;">Refresh Models</button>
+            </div>
+
             <!-- TTS Engine Configuration -->
             <div class="panel">
                 <h2>🔊 Text-to-Speech Engine</h2>
@@ -526,6 +546,73 @@
                 <button onclick="savePersona()">Save Persona</button>
                 <button onclick="enhancePersona()" style="margin-left: 10px; background: #e74c3c;">✨ AI Enhance</button>
                 <button onclick="clearPersona()" style="margin-left: 10px; background: #95a5a6;">Clear</button>
+            </div>
+        </div>
+
+        <!-- Advanced AI Settings -->
+        <div class="panel">
+            <div class="config-section">
+                <h2>⚡ Advanced AI Settings</h2>
+                <div class="success-message" id="advanced-success">Settings saved successfully!</div>
+
+                <div class="form-group">
+                    <label for="short-term-limit">Short-term Memory Limit (Recent Messages)</label>
+                    <input type="number" id="short-term-limit" min="1" max="20" value="10" placeholder="10">
+                    <p style="font-size: 0.85em; color: #666; margin-top: 5px;">
+                        Number of recent conversation messages to include in context (default: 10, higher = more context but slower)
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="long-term-limit">Long-term Memory Limit (Semantic Context)</label>
+                    <input type="number" id="long-term-limit" min="1" max="20" value="10" placeholder="10">
+                    <p style="font-size: 0.85em; color: #666; margin-top: 5px;">
+                        Number of semantically relevant past conversations to retrieve (default: 10)
+                    </p>
+                </div>
+
+                <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="use-chain-of-thought" style="width: auto; margin: 0;">
+                    <label for="use-chain-of-thought" style="margin: 0; flex: 1;">
+                        Enable Chain-of-Thought Reasoning (for complex questions)
+                    </label>
+                </div>
+                <p style="font-size: 0.85em; color: #666; margin-top: -5px; margin-left: 30px;">
+                    Makes AI think step-by-step for complex queries (slightly slower but more accurate)
+                </p>
+
+                <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="use-semantic-ranking" checked style="width: auto; margin: 0;">
+                    <label for="use-semantic-ranking" style="margin: 0; flex: 1;">
+                        Enable Semantic Memory Ranking (retrieves most relevant memories)
+                    </label>
+                </div>
+                <p style="font-size: 0.85em; color: #666; margin-top: -5px; margin-left: 30px;">
+                    Uses AI to find the most relevant memories instead of just recent ones (recommended)
+                </p>
+
+                <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="use-response-validation" style="width: auto; margin: 0;">
+                    <label for="use-response-validation" style="margin: 0; flex: 1;">
+                        Enable Response Validation (detects hallucinations)
+                    </label>
+                </div>
+                <p style="font-size: 0.85em; color: #666; margin-top: -5px; margin-left: 30px;">
+                    AI validates its own responses for accuracy (slower but reduces false information)
+                </p>
+
+                <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="enable-parallel-processing" checked style="width: auto; margin: 0;">
+                    <label for="enable-parallel-processing" style="margin: 0; flex: 1;">
+                        Enable Parallel Processing (faster performance)
+                    </label>
+                </div>
+                <p style="font-size: 0.85em; color: #666; margin-top: -5px; margin-left: 30px;">
+                    Fetches memories and schedule simultaneously for faster responses (recommended)
+                </p>
+
+                <button onclick="saveAdvancedSettings()">Save Settings</button>
+                <button onclick="loadAdvancedSettings()" style="margin-left: 10px; background: #95a5a6;">Refresh</button>
             </div>
         </div>
 
@@ -859,10 +946,12 @@
             loadStats();
             loadOllamaConfig();
             loadVisionConfig();
+            loadMemoryModelConfig();
             loadUsers();
             loadTTSEngine();
             loadWhisperLanguage();
             loadPersona();
+            loadAdvancedSettings();
             loadConversations();
             loadMemories();
             loadEmailSettings();
@@ -1023,6 +1112,22 @@
             }
         }
 
+        // Memory Extraction Model Configuration Functions
+        async function loadMemoryModelConfig() {
+            try {
+                const response = await fetch('/api/ollama/memory_model_config');
+                const data = await response.json();
+
+                // Load available models
+                await refreshMemoryModels();
+
+                // Set current memory model
+                document.getElementById('memory-model').value = data.memory_extraction_model || 'qwen2.5:3b';
+            } catch (error) {
+                console.error('Error loading memory model config:', error);
+            }
+        }
+
         async function refreshVisionModels() {
             try {
                 const response = await fetch('/api/ollama/vision_models');
@@ -1072,6 +1177,58 @@
                 const errorMsg = document.getElementById('ollama-error');
                 errorMsg.style.display = 'block';
                 setTimeout(() => errorMsg.style.display = 'none', 3000);
+            }
+        }
+
+        async function saveMemoryModelConfig() {
+            const memoryModel = document.getElementById('memory-model').value;
+
+            try {
+                const response = await fetch('/api/ollama/memory_model_config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({memory_extraction_model: memoryModel})
+                });
+
+                if (response.ok) {
+                    const successMsg = document.getElementById('memory-model-success');
+                    successMsg.style.display = 'block';
+                    setTimeout(() => successMsg.style.display = 'none', 3000);
+                }
+            } catch (error) {
+                console.error('Error saving memory model config:', error);
+                const errorMsg = document.getElementById('ollama-error');
+                errorMsg.style.display = 'block';
+                setTimeout(() => errorMsg.style.display = 'none', 3000);
+            }
+        }
+
+        async function refreshMemoryModels() {
+            try {
+                const response = await fetch('/api/ollama/models');
+                const data = await response.json();
+
+                const select = document.getElementById('memory-model');
+                const currentValue = select.value;
+
+                select.innerHTML = '';
+
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model;
+                        option.textContent = model;
+                        select.appendChild(option);
+                    });
+
+                    select.value = currentValue;
+                } else {
+                    select.innerHTML = '<option value="qwen2.5:3b">qwen2.5:3b (Recommended)</option>' +
+                                       '<option value="llama3.2:3b">llama3.2:3b</option>' +
+                                       '<option value="llama3.2:latest">llama3.2:latest</option>';
+                }
+            } catch (error) {
+                console.error('Error refreshing memory models:', error);
             }
         }
 
@@ -1532,6 +1689,51 @@
             if (confirm('Are you sure you want to clear the persona?')) {
                 document.getElementById('persona-text').value = '';
                 savePersona();
+            }
+        }
+
+        // Advanced AI Settings
+        async function loadAdvancedSettings() {
+            try {
+                const response = await fetch('/api/advanced-settings');
+                const data = await response.json();
+                
+                document.getElementById('short-term-limit').value = data.short_term_memory_limit || 10;
+                document.getElementById('long-term-limit').value = data.long_term_memory_limit || 10;
+                document.getElementById('use-chain-of-thought').checked = data.use_chain_of_thought === 'true';
+                document.getElementById('use-semantic-ranking').checked = data.use_semantic_memory_ranking === 'true';
+                document.getElementById('use-response-validation').checked = data.use_response_validation === 'true';
+                document.getElementById('enable-parallel-processing').checked = data.enable_parallel_processing === 'true';
+            } catch (error) {
+                console.error('Error loading advanced settings:', error);
+            }
+        }
+
+        async function saveAdvancedSettings() {
+            const settings = {
+                short_term_memory_limit: document.getElementById('short-term-limit').value,
+                long_term_memory_limit: document.getElementById('long-term-limit').value,
+                use_chain_of_thought: document.getElementById('use-chain-of-thought').checked ? 'true' : 'false',
+                use_semantic_memory_ranking: document.getElementById('use-semantic-ranking').checked ? 'true' : 'false',
+                use_response_validation: document.getElementById('use-response-validation').checked ? 'true' : 'false',
+                enable_parallel_processing: document.getElementById('enable-parallel-processing').checked ? 'true' : 'false'
+            };
+
+            try {
+                const response = await fetch('/api/advanced-settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    const successMsg = document.getElementById('advanced-success');
+                    successMsg.style.display = 'block';
+                    setTimeout(() => successMsg.style.display = 'none', 3000);
+                }
+            } catch (error) {
+                console.error('Error saving advanced settings:', error);
+                alert('Failed to save advanced settings');
             }
         }
 

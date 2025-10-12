@@ -891,7 +891,8 @@ class AIPipeline:
         """Extract important information from conversation and save as persistent memory"""
         try:
             ollama_url = self.get_config('ollama_url', config.DEFAULT_OLLAMA_URL)
-            ollama_model = self.get_config('ollama_model', config.DEFAULT_OLLAMA_MODEL)
+            # Use specialized memory extraction model for better precision
+            ollama_model = self.get_config('memory_extraction_model', 'qwen2.5:3b')
 
             # Get current date for context
             from zoneinfo import ZoneInfo
@@ -901,7 +902,7 @@ class AIPipeline:
             current_date_str = current_datetime.strftime("%Y-%m-%d (%A, %B %d, %Y)")
 
             # Prompt to extract important information with stricter JSON format requirements
-            extraction_prompt = f"""Analyze this conversation and extract important information to remember.
+            extraction_prompt = f"""Analyze this conversation and extract ONLY truly important information worth remembering long-term.
 
 CURRENT DATE: {current_date_str}
 
@@ -909,45 +910,87 @@ User: "{user_message}"
 Assistant: "{assistant_response}"
 
 Categories:
-- schedule: appointments, meetings, events with dates/times
-- fact: personal information, preferences, relationships, details
-- task: things to do, reminders, action items
+- schedule: appointments, meetings, events with dates/times (must have specific date/time)
+- fact: personal information, preferences, relationships, important details
+- task: significant action items with lasting value (not immediate/temporary tasks)
 - preference: likes, dislikes, habits
 - other: other important information
 
-CRITICAL RULES:
-1. ONLY extract information that is actually mentioned and important
+CRITICAL RULES - BE VERY SELECTIVE:
+1. ONLY extract information that would be valuable to remember weeks or months from now
 2. Do NOT create entries with empty content
 3. If there's nothing important to remember, return an empty array: []
 4. You MUST respond with ONLY valid JSON, nothing else
-5. DO NOT extract schedule memories when the user is just ASKING or QUERYING about their schedule
-6. ONLY extract schedule memories when the user is TELLING you about NEW events or appointments
-7. If the user asks "what's on my schedule", "tell me my calendar", "do I have anything", etc., return []
-8. DO NOT extract schedule memories from CONFIRMATION emails or emails DISCUSSING already-scheduled events
-9. ONLY create schedule memories for NEW scheduling requests, not confirmations of existing bookings
+5. When in doubt, DO NOT extract - it's better to miss something than to save junk
 
-IMPORTANT: Query questions and confirmations should return empty array. Examples:
-- "What's on my schedule?" → []
-- "Tell me about my calendar" → []
-- "Do I have anything tomorrow?" → []
-- "What do I have next week?" → []
-- "Your flight confirmation for October 21-25" → [] (this is a confirmation, not a new request)
-- "Reminder: your appointment is on Friday" → [] (this is a reminder, not a new request)
+DO NOT EXTRACT:
+- Immediate/temporary tasks (e.g., "get the bath going", "clean up", "turn on the light")
+- Conversational pleasantries (e.g., "good morning", "I'm excited", "feeling nervous")
+- Vague or incomplete statements (e.g., "follows boundaries", "review this", "clean up")
+- Meta-instructions about calendar (e.g., "make sure it's on your calendar", "review attachment")
+- Query questions (e.g., "What's on my schedule?", "Do I have anything tomorrow?")
+- Confirmations or reminders of existing events (e.g., "Your flight confirmation", "Reminder: appointment")
+- Tasks that are happening RIGHT NOW or within the next few hours
+- Emotional states or feelings unless medically significant
+- Fragments or partial sentences that lack context
+
+ONLY EXTRACT:
+- Schedule: Specific appointments/events with clear dates (e.g., "Doctor appointment next Tuesday 2pm")
+- Facts: Significant personal details (e.g., "Allergic to peanuts", "Works as IT Consultant at Acme Corp")
+- Tasks: Important action items with lasting value (e.g., "File taxes by April 15", "Renew passport")
+- Preferences: Meaningful preferences (e.g., "Prefers vegetarian meals", "Dislikes horror movies")
+
+SCHEDULE RULES:
+- DO NOT extract when user is ASKING about their schedule
+- ONLY extract when user is TELLING you about NEW events
+- DO NOT extract from confirmation emails or reminders
+- Must have specific details (who, what, when)
+- Must include date_expression and be parseable
+
+TASK RULES:
+- Task must have value beyond today
+- Must be specific and actionable
+- NO temporary household tasks (cleaning, cooking, bathing)
+- NO immediate requests (happening in next few hours)
+
+FACT RULES:
+- Must be objectively important personal information
+- NO conversational fluff or emotions
+- NO incomplete fragments
+- Must add value to future conversations
+
+EXAMPLES OF WHAT NOT TO EXTRACT:
+❌ "Wait for you to get in the bath" (immediate, temporary)
+❌ "Clean up" (vague, temporary)
+❌ "Review this and make sure it's on your calendar" (meta-instruction)
+❌ "Lovely morning! Feeling nervous..." (conversational fluff)
+❌ "follows boundaries that work for both of us" (fragment, vague)
+❌ "Baby showers" (too vague, no details)
+❌ "Travel Dates review" (vague, meta-instruction)
+❌ "What's on my schedule?" (query question)
+
+EXAMPLES OF WHAT TO EXTRACT:
+✅ {{"category": "schedule", "content": "Dr. Smith annual checkup", "importance": 7, "date_expression": "next Tuesday", "event_time": "14:00"}}
+✅ {{"category": "fact", "content": "Works as IT Consultant at Microsoft", "importance": 6}}
+✅ {{"category": "task", "content": "Renew driver's license before it expires in March", "importance": 8}}
+✅ {{"category": "preference", "content": "Prefers decaf coffee after 3pm", "importance": 4}}
 
 For SCHEDULE category memories:
 - Extract the date expression as spoken: "next Friday", "tomorrow", "October 15", etc.
 - Use date_expression field for the raw expression
 - Use HH:MM format (24-hour) for event_time, or use actual null (not the string "null") if no specific time
-- Include description in content field
+- Include specific description in content field (who, what)
 
 Format (return empty array if nothing important):
 [
-  {{"category": "schedule", "content": "Haircut appointment", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
-  {{"category": "fact", "content": "Likes tea over coffee", "importance": 4}}
+  {{"category": "schedule", "content": "Haircut appointment with Jane", "importance": 6, "date_expression": "next Friday", "event_time": "09:30"}},
+  {{"category": "fact", "content": "Allergic to shellfish", "importance": 8}}
 ]
 
 Valid categories: schedule, fact, task, preference, other
 Importance: 1-10 (1=low, 10=critical)
+
+REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
@@ -1765,15 +1808,57 @@ User: "What do I have next week?"
             if conn:
                 self.release_db_connection(conn)
 
+    def is_schedule_query(self, message):
+        """Detect if user is asking about their schedule/calendar"""
+        schedule_keywords = [
+            'schedule', 'calendar', 'appointment', 'meeting', 'event',
+            'what do i have', 'what\'s on', 'do i have', 'am i free',
+            'busy', 'available', 'plans', 'what\'s coming up',
+            'tomorrow', 'today', 'tonight', 'next week', 'this week',
+            'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+            'when is', 'what time', 'upcoming'
+        ]
+        message_lower = message.lower()
+        return any(keyword in message_lower for keyword in schedule_keywords)
+
+    def extract_date_context(self, message):
+        """Extract date context from user query for smart filtering"""
+        message_lower = message.lower()
+
+        # Specific day queries
+        if any(word in message_lower for word in ['tomorrow']):
+            return 'tomorrow'
+        if any(word in message_lower for word in ['today', 'tonight']):
+            return 'today'
+        if 'next week' in message_lower or 'this week' in message_lower:
+            return 'week'
+        if 'next month' in message_lower or 'this month' in message_lower:
+            return 'month'
+
+        # Specific day names
+        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        for day in days:
+            if day in message_lower:
+                return day
+
+        # Default to full calendar view
+        return 'all'
+
     def build_prompt_with_context(self, current_message, user_name=None, session_id=None):
         """Build a prompt with short-term (current session) and long-term (semantic) memory"""
         try:
+            # Detect if this is a schedule-related query
+            is_schedule_related = self.is_schedule_query(current_message)
+            date_context = self.extract_date_context(current_message) if is_schedule_related else None
+
             # Get bot persona from config
             persona = self.get_config('bot_persona', '')
 
             # Get memory limits from config
             short_term_limit = int(self.get_config('short_term_memory_limit', '3'))
             long_term_limit = int(self.get_config('long_term_memory_limit', '3'))
+
+            logger.debug(f"Schedule query: {is_schedule_related}, Date context: {date_context}")
 
             # Build the full prompt
             full_prompt = ""
@@ -1833,44 +1918,57 @@ SCHEDULING CAPABILITIES:
                 )
                 logger.info(f"Retrieved {len(schedule_events)} schedule events for {user_name}")
 
-            # Add schedule events to context - ALWAYS include this section
-            full_prompt += f"📅 {user_name.upper()}'S UPCOMING SCHEDULE (next 30 days from {current_datetime.strftime('%A, %B %d, %Y')}):\n"
-            if schedule_events:
-                for event in schedule_events:
-                    event_date_obj = event['event_date']
-                    event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
-                    event_time_str = str(event['event_time']) if event['event_time'] else "All day"
-                    importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
-                    full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
-                    if event['description']:
-                        full_prompt += f"   Details: {event['description']}\n"
-                full_prompt += "\n⚠️ CRITICAL SCHEDULE INSTRUCTIONS:\n"
-                full_prompt += "- These are the ONLY events scheduled. Do not mention any events not listed above.\n"
-                full_prompt += "- Use the EXACT dates shown. Do not guess or approximate dates.\n"
-                full_prompt += "- If asked about a specific time period, only mention events that fall within that period based on the dates shown.\n\n"
-            else:
-                full_prompt += "NO EVENTS SCHEDULED\n\n"
-                full_prompt += "⚠️ CRITICAL: The schedule is EMPTY. When asked about schedule/calendar:\n"
-                full_prompt += "- Say clearly: \"You don't have anything on your schedule\" or \"Your calendar is clear\"\n"
-                full_prompt += "- DO NOT make up events, appointments, or plans\n"
-                full_prompt += "- DO NOT suggest events that might exist\n"
-                full_prompt += "- DO NOT hallucinate schedule information\n\n"
+            # Add schedule events to context - ONLY when user asks about schedule
+            if is_schedule_related and schedule_events:
+                # Filter events based on date context
+                filtered_events = []
 
-            # Add persistent memories to context
-            if persistent_memories:
-                full_prompt += "IMPORTANT SAVED INFORMATION (use this to answer questions accurately):\n"
-                for mem in persistent_memories:
-                    category_label = mem['category'].upper()
-                    # For schedule memories with date/time, format them specially
-                    if mem['category'] == 'schedule' and mem.get('event_date'):
-                        event_date_obj = mem['event_date']
+                if date_context == 'today':
+                    today_str = current_datetime.strftime('%Y-%m-%d')
+                    filtered_events = [e for e in schedule_events if str(e['event_date']) == today_str]
+                    time_range = "TODAY"
+                elif date_context == 'tomorrow':
+                    tomorrow = current_datetime + timedelta(days=1)
+                    tomorrow_str = tomorrow.strftime('%Y-%m-%d')
+                    filtered_events = [e for e in schedule_events if str(e['event_date']) == tomorrow_str]
+                    time_range = "TOMORROW"
+                elif date_context == 'week':
+                    week_end = current_datetime + timedelta(days=7)
+                    filtered_events = [e for e in schedule_events if current_datetime.date() <= e['event_date'] <= week_end.date()]
+                    time_range = "THIS WEEK"
+                elif date_context in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                    filtered_events = [e for e in schedule_events if e['event_date'].strftime('%A').lower() == date_context]
+                    time_range = date_context.upper()
+                else:
+                    # Show all events (default)
+                    filtered_events = schedule_events
+                    time_range = "UPCOMING"
+
+                full_prompt += f"📅 {user_name.upper()}'S {time_range} SCHEDULE:\n"
+                if filtered_events:
+                    for event in filtered_events:
+                        event_date_obj = event['event_date']
                         event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
-                        event_time_str = str(mem.get('event_time', 'all day'))
-                        full_prompt += f"[{category_label}] {mem['content']} (Date: {event_date_str}, Time: {event_time_str})\n"
-                    else:
-                        full_prompt += f"[{category_label}] {mem['content']}\n"
+                        event_time_str = str(event['event_time']) if event['event_time'] else "All day"
+                        importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
+                        full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
+                        if event['description']:
+                            full_prompt += f"   Details: {event['description']}\n"
+                    full_prompt += "\n⚠️ Only mention events listed above. Use EXACT dates shown.\n\n"
+                else:
+                    full_prompt += f"NO EVENTS for {time_range}\n\n"
+            elif is_schedule_related and not schedule_events:
+                full_prompt += "📅 SCHEDULE: Empty - no events scheduled. Clearly tell the user their calendar is clear.\n\n"
+
+            # Add persistent memories to context (exclude schedule category - shown separately above)
+            non_schedule_memories = [mem for mem in persistent_memories if mem['category'] != 'schedule']
+            if non_schedule_memories:
+                full_prompt += "IMPORTANT SAVED INFORMATION:\n"
+                for mem in non_schedule_memories:
+                    category_label = mem['category'].upper()
+                    full_prompt += f"[{category_label}] {mem['content']}\n"
                     logger.debug(f"Adding memory to prompt: [{category_label}] {mem['content']}")
-                full_prompt += "\nUse this information to answer questions. If asked about schedules, tasks, or facts, refer to the saved information above.\n\n"
+                full_prompt += "\n"
 
             # Get short-term memory (current session)
             short_term_memory = []

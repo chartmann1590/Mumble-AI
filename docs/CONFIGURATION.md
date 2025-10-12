@@ -37,7 +37,7 @@ DEVICE=cpu
 ### TTS Configuration
 
 ```bash
-# TTS Engine selection (piper or silero)
+# TTS Engine selection (piper, silero, or chatterbox)
 TTS_ENGINE=piper
 
 # Piper TTS voice (if using Piper)
@@ -45,6 +45,9 @@ PIPER_VOICE=en_US-lessac-medium
 
 # Silero TTS voice (if using Silero)
 SILERO_VOICE=en_0
+
+# Chatterbox TTS voice (if using Chatterbox)
+CHATTERBOX_VOICE=default
 ```
 
 ### Ollama Configuration
@@ -98,6 +101,70 @@ Edit `docker-compose.yml`:
 web-control-panel:
   ports:
     - "8080:5002"  # Change 8080 to your desired port
+```
+
+### Chatterbox TTS Configuration
+
+```bash
+# Device: cpu or cuda (requires GPU setup)
+DEVICE=cpu
+
+# TTS model (currently only XTTS-v2 supported)
+TTS_MODEL=XTTS-v2
+
+# Voice cloning settings
+VOICE_CLONING_ENABLED=true
+REFERENCE_AUDIO_DURATION=10  # seconds
+```
+
+### Email Summary Service Configuration
+
+```bash
+# Email settings
+EMAIL_SMTP_SERVER=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_IMAP_SERVER=imap.gmail.com
+EMAIL_IMAP_PORT=993
+EMAIL_USERNAME=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password
+EMAIL_ENABLED=true
+
+# Daily summary settings
+DAILY_SUMMARY_TIME=09:00
+SUMMARY_RECIPIENTS=user1@example.com,user2@example.com
+
+# Vision AI for attachments
+VISION_MODEL=moondream
+VISION_MODEL_URL=http://host.docker.internal:11434
+
+# Memory extraction
+MEMORY_MODEL=mistral
+MEMORY_MODEL_URL=http://host.docker.internal:11434
+```
+
+### Vision AI Configuration
+
+```bash
+# Vision model for email attachment analysis
+VISION_MODEL=moondream
+VISION_MODEL_URL=http://host.docker.internal:11434
+
+# Alternative vision models
+# VISION_MODEL=llava
+# VISION_MODEL=bakllava
+```
+
+### Memory Extraction Configuration
+
+```bash
+# Model for extracting memories from conversations
+MEMORY_MODEL=mistral
+MEMORY_MODEL_URL=http://host.docker.internal:11434
+
+# Memory extraction settings
+MEMORY_EXTRACTION_ENABLED=true
+MEMORY_IMPORTANCE_THRESHOLD=5
+MEMORY_CATEGORIES=Schedule,Fact,Task,Preference,Reminder,Other
 ```
 
 ### SIP Bridge

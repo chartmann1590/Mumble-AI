@@ -1,59 +1,72 @@
 # Mumble AI Bot
 
-A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech recognition, text-to-speech, conversation memory, and a web-based control panel.
+A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers with advanced speech recognition, multiple text-to-speech engines, intelligent memory systems, email integration, and voice cloning capabilities.
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 
-## Features
+## 🚀 Features
 
 ### 🎙️ Voice & Text Interaction
-- **Speech-to-Text**: Real-time voice transcription using Faster Whisper
-- **Text-to-Speech**: Triple TTS engines - Piper TTS (50+ voices), Silero TTS (20+ voices), and Chatterbox (voice cloning)
-- **Voice Cloning**: Clone any voice with 3-10 seconds of reference audio using Chatterbox TTS (WORK IN PROGRESS)
+- **Speech-to-Text**: Real-time voice transcription using Faster Whisper with GPU acceleration
+- **Multi-Engine TTS**: Four TTS engines - Piper TTS (50+ voices), Silero TTS (20+ voices), Chatterbox (voice cloning), and Email TTS
+- **Voice Cloning**: Clone any voice with 3-10 seconds of reference audio using Chatterbox TTS with XTTS-v2
 - **Dual Communication**: Responds to voice with voice, text with text
 - **Silence Detection**: Automatically processes speech after 1.5 seconds of silence
+- **Audio Processing**: Professional-grade audio resampling (48kHz for Mumble compatibility)
 
-### 🤖 AI Integration
+### 🤖 Advanced AI Integration
 - **Ollama Integration**: Local LLM support (llama3.2, qwen2.5-coder, gemma3, and more)
 - **Persistent Memories**: AI-powered automatic extraction and storage of schedules, facts, tasks, and preferences
 - **Smart Scheduling**: AI extracts dates from natural language ("next Friday at 3pm") and creates calendar events
-- **Duplicate Prevention**: Intelligent deduplication system prevents duplicate events and memories from being created
+- **Duplicate Prevention**: Intelligent deduplication system prevents duplicate events and memories
 - **Semantic Memory**: Dual memory architecture with short-term (session) and long-term (semantic search) context
 - **Context-Aware**: Intelligent conversation flow with anti-repetition and anti-hallucination safeguards
 - **Custom Personas**: Define and AI-enhance bot personalities
+- **Vision AI**: Process and analyze email attachments (images, PDFs, documents) using Moondream and other vision models
 
 ### 🌐 Multiple Access Methods
 - **Mumble Client**: Traditional desktop/mobile Mumble clients
-- **Web Clients**: Two web-based Mumble clients (simple and full-featured)
+- **Web Clients**: Two web-based Mumble clients (simple and full-featured) with SSL support
 - **SIP Bridge**: Connect traditional phones via SIP/RTP to Mumble with personalized welcome messages
-- **Web Control Panel**: Management interface for configuration
-- **TTS Voice Generator**: Beautiful web interface supporting both Piper and Silero TTS engines
+- **Email Integration**: Two-way email communication with AI-powered responses and attachment processing
+- **Web Control Panel**: Comprehensive management interface for all configuration
+- **TTS Voice Generator**: Beautiful standalone web interface for voice generation and cloning
+
+### 📧 Email System
+- **Two-Way Email**: Send emails to the bot and receive intelligent AI responses
+- **Thread-Aware Conversations**: Bot maintains context across email threads
+- **Attachment Processing**: Analyze images, PDFs, and documents with AI vision
+- **Daily Summaries**: Automated AI-generated email summaries of conversations
+- **Email Reminders**: Smart notifications for scheduled events
+- **Action Tracking**: Bot reports success/failure of memory and calendar actions
+- **IMAP Integration**: Receive emails from any IMAP server
+- **SMTP Support**: Send emails via any SMTP server with TLS/SSL support
 
 ### 🎨 Web Control Panel
 - **Real-Time Dashboard**: Live statistics, conversation monitoring, and upcoming events display
-- **Schedule Manager**: Full calendar interface for managing events with importance levels and color-coding
-- **Email Reminders**: AI-generated email notifications for scheduled events (15, 30, or 60 minutes before)
-- **Upcoming Events**: Dashboard widget showing next 7 days, list view showing next 30 days
+- **Schedule Manager**: Full calendar interface with drag-and-drop, importance levels, and color-coding
 - **Memory Management**: View, filter, and manage persistent memories by user and category
-- **Email Summaries**: Beautiful HTML emails with AI summaries, schedule events, and extracted memories
-- **Voice Selection**: Choose from 50+ diverse TTS voices across Piper and Silero engines
-- **Model Management**: Switch between Ollama models on-the-fly
+- **Email Configuration**: Complete SMTP/IMAP setup with test functionality
+- **Voice Selection**: Choose from 70+ diverse TTS voices across all engines
+- **Model Management**: Switch between Ollama models and vision models on-the-fly
 - **Persona Configuration**: Create custom bot personalities with AI enhancement
 - **History Management**: View and clear conversation history
-- **12-Hour Time Display**: All timestamps shown in user-friendly 12-hour format (e.g., 3:45 PM) in New York Eastern Time
+- **Advanced Settings**: Configure memory limits, semantic search, and processing options
+- **12-Hour Time Display**: All timestamps in user-friendly 12-hour format (NY Eastern Time)
 
 ### 🎵 TTS Voice Generator (Standalone)
 - **Independent Service**: Standalone web interface for voice generation
-- **Beautiful Web Interface**: Modern, responsive design with gradient backgrounds
-- **Dual TTS Engines**: Support for both Piper TTS (50+ voices) and Silero TTS (20+ voices)
+- **Multi-Engine Support**: Piper TTS, Silero TTS, and Chatterbox voice cloning
+- **Voice Cloning**: Upload reference audio and clone any voice
+- **Voice Library**: Save and manage cloned voices with metadata
 - **Advanced Filtering**: Filter voices by region, gender, and quality level
 - **Real-Time Preview**: Test voices before generating full audio
 - **Text Input Validation**: Character counting and input validation (up to 5000 chars)
 - **Audio Player**: Built-in player with duration display
 - **Download Support**: Generate and download high-quality WAV files
 - **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
-- **On-Demand TTS**: Only uses TTS services when generating audio files
 
 ### 🔧 Technical Features
 - **Docker Compose**: Full stack deployment with one command
@@ -66,54 +79,39 @@ A fully-featured AI-powered voice assistant for Mumble VoIP servers with speech 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    User Access Layer                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐   │
-│  │Mumble Client │  │ Web Clients  │  │  SIP Phones     │   │
-│  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)     │   │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘   │
-└─────────┼──────────────────┼───────────────────┼────────────┘
-          │                  │                   │
-┌─────────▼──────────────────▼───────────────────▼────────────┐
-│                  Mumble Server (Port 48000)                │
-│         (Internal: 64738, External: 48000)                 │
-└─────────┬──────────────────────────────────────────────────┘
-          │
-    ┌─────▼─────┐
-    │  AI Bot   │
-    └─┬───┬───┬─┘
-      │   │   │
-┌─────▼───▼───▼──────────────────────────────────────────────┐
-│                    Service Layer                           │
-│  ┌──────────┐  ┌────────┐  ┌─────────┐  ┌──────────────┐  │
-│  │ Faster   │  │ Piper  │  │ Ollama  │  │  PostgreSQL  │  │
-│  │ Whisper  │  │  TTS   │  │(External│  │              │  │
-│  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │
-│  └──────────┘  └────────┘  └─────────┘  └──────────────┘  │
-│  ┌──────────┐                                             │
-│  │ Silero   │                                             │
-│  │  TTS     │                                             │
-│  │(Port5004)│                                             │
-│  └──────────┘                                             │
-└─────────────────────────────────────────────────────────────┘
-                      │
-              ┌───────▼────────┐
-              │ Web Control    │
-              │ Panel (5002)   │
-              └────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│              Standalone TTS Voice Generator                │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │         TTS Voice Generator (Port 5003)           │   │
-│  │              (Web Interface)                       │   │
-│  └─────────────────┬───────────────────────────────────┘   │
-│                    │                                       │
-│  ┌─────────────────▼───────────────────────────────────┐   │
-│  │         Uses Piper TTS & Silero TTS                 │   │
-│  │            (On-demand only)                         │   │
-│  └────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           User Access Layer                                │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
+│  │Mumble Client │  │ Web Clients  │  │  SIP Phones  │  │ Email Clients   │ │
+│  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)  │  │(IMAP/SMTP)     │ │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
+└─────────┼──────────────────┼──────────────────┼───────────────────┼─────────┘
+          │                  │                  │                   │
+┌─────────▼──────────────────▼──────────────────▼───────────────────▼─────────┐
+│                        Application Layer                                      │
+│  ┌──────────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │  Mumble Server   │  │ SIP Bridge   │  │ Email System │  │ Mumble Web  │  │
+│  │   (Port 48000)   │  │(Port 5060)   │  │(Port 5006)   │  │  Client     │  │
+│  └─────────┬────────┘  └──────┬───────┘  └──────┬───────┘  │(Port 8081)  │  │
+│            │                  │                  │          └─────────────┘  │
+│       ┌────▼──────┐           │                  │                          │
+│       │  AI Bot   │           │                  │                          │
+│       └─┬───┬───┬─┘           │                  │                          │
+└─────────┼───┼───┼─────────────┼──────────────────┼──────────────────────────┘
+          │   │   │             │                  │
+┌─────────▼───▼───▼─────────────▼──────────────────▼──────────────────────────┐
+│                            Service Layer                                    │
+│  ┌──────────┐  ┌────────┐  ┌─────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │ Faster   │  │ Piper  │  │ Ollama  │  │  PostgreSQL  │  │ Mumble Web  │  │
+│  │ Whisper  │  │  TTS   │  │(External│  │              │  │   Simple    │  │
+│  │(Port5000)│  │(5001)  │  │ :11434) │  │  (Internal)  │  │(Build Only) │  │
+│  └──────────┘  └────────┘  └─────────┘  └──────────────┘  └─────────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  ┌─────────────┐  │
+│  │ Silero   │  │Chatterbox│  │ TTS Web  │  │ Web Control │  │ Email       │  │
+│  │  TTS     │  │   TTS    │  │Interface │  │   Panel     │  │ Summary     │  │
+│  │(Port5004)│  │(Port5005)│  │(Port5003)│  │  (Port5002) │  │(Port 5006)  │  │
+│  └──────────┘  └──────────┘  └──────────┘  └─────────────┘  └─────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Prerequisites
@@ -220,20 +218,20 @@ From here you can:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Mumble Server | 48000 (external), 64738 (internal) | VoIP server |
-| Faster Whisper | 5000 | Speech-to-text API |
-| Piper TTS | 5001 | Text-to-speech API (50+ voices) |
-| Web Control Panel | 5002 | Management interface |
-| TTS Voice Generator | 5003 | Standalone voice generation web interface |
-| Silero TTS | 5004 | Alternative text-to-speech API (20+ voices) |
-| Chatterbox TTS | 5005 | Voice cloning TTS API (WORK IN PROGRESS) |
-| Email Summary Service | 5006 | Email summary API with retry logic |
-| PostgreSQL | 5432 | Database (internal) |
-| AI Bot | - | Mumble client |
-| SIP Bridge | 5060 | SIP/RTP to Mumble bridge |
-| Mumble Web | 8081 (HTTPS) | Web-based Mumble client with SSL |
-| Mumble Web Nginx | - | SSL/TLS proxy for Mumble Web (internal) |
-| Mumble Web Simple | - | Simplified web client (build only) |
+| **Mumble Server** | 48000 (external), 64738 (internal) | VoIP server with persistent data |
+| **Faster Whisper** | 5000 | Speech-to-text API with GPU acceleration |
+| **Piper TTS** | 5001 | Text-to-speech API (50+ voices, 9 languages) |
+| **Web Control Panel** | 5002 | Management interface with real-time dashboard |
+| **TTS Voice Generator** | 5003 | Standalone voice generation and cloning interface |
+| **Silero TTS** | 5004 | Alternative text-to-speech API (20+ voices) |
+| **Chatterbox TTS** | 5005 | Voice cloning TTS API with XTTS-v2 |
+| **Email Summary Service** | 5006 | Email processing, summaries, and IMAP/SMTP |
+| **PostgreSQL** | 5432 | Database (internal) with persistent storage |
+| **AI Bot** | - | Mumble client with memory and scheduling |
+| **SIP Bridge** | 5060 | SIP/RTP to Mumble bridge with welcome messages |
+| **Mumble Web** | 8081 (HTTPS) | Web-based Mumble client with SSL |
+| **Mumble Web Nginx** | - | SSL/TLS proxy for Mumble Web (internal) |
+| **Mumble Web Simple** | - | Simplified web client (build only) |
 
 **Port 48000 Explanation:** The standard Mumble port 64738 is reserved by Windows Hyper-V on many systems. Port 48000 is used externally to avoid conflicts, while internal Docker services still communicate on 64738.
 
@@ -260,9 +258,9 @@ From here you can:
 Access at `http://localhost:5003`
 
 **Features**
-- **Triple TTS Engines**: Choose between Piper TTS (50+ voices), Silero TTS (20+ voices), and Chatterbox (voice cloning - WORK IN PROGRESS)
+- **Triple TTS Engines**: Choose between Piper TTS (50+ voices), Silero TTS (20+ voices), and Chatterbox (voice cloning)
 - **Voice Selection**: Choose from 70+ voices across 9 languages and regions
-- **Voice Cloning**: Upload reference audio to clone any voice (Chatterbox engine - WORK IN PROGRESS)
+- **Voice Cloning**: Upload reference audio to clone any voice using XTTS-v2 model
 - **Advanced Filtering**: Filter by region, gender, and quality level
 - **Text Input**: Enter up to 5000 characters for synthesis
 - **Real-Time Preview**: Test voices with sample text before generating
@@ -460,6 +458,40 @@ Manage events and appointments with a full calendar interface:
 
 ## Configuration
 
+### Environment Variables
+
+Key configuration options in `.env`:
+
+```env
+# AI Models
+OLLAMA_MODEL=mistral
+OLLAMA_URL=http://host.docker.internal:11434
+WHISPER_MODEL=base
+WHISPER_LANGUAGE=en
+
+# TTS Configuration
+TTS_ENGINE=piper
+PIPER_VOICE=lessac
+SILERO_VOICE=0
+CHATTERBOX_VOICE=default
+
+# Email Settings
+EMAIL_SMTP_SERVER=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_IMAP_SERVER=imap.gmail.com
+EMAIL_IMAP_PORT=993
+EMAIL_USERNAME=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password
+
+# Vision AI
+VISION_MODEL=moondream
+VISION_MODEL_URL=http://host.docker.internal:11434
+
+# Memory Extraction
+MEMORY_MODEL=mistral
+MEMORY_MODEL_URL=http://host.docker.internal:11434
+```
+
 ### Whisper Model Sizes
 
 Larger models are more accurate but slower:
@@ -470,6 +502,14 @@ Larger models are more accurate but slower:
 - `medium` - High accuracy
 - `large` - Best accuracy, slowest
 
+### TTS Engines
+
+Choose your preferred TTS engine:
+
+- `piper` - High quality, 50+ voices, 9 languages
+- `silero` - Fast, 20+ voices, good quality
+- `chatterbox` - Voice cloning with XTTS-v2
+
 ### Ollama Models
 
 You can use any Ollama model. Popular options:
@@ -478,45 +518,92 @@ You can use any Ollama model. Popular options:
 - `mistral` - Fast and capable
 - `codellama` - For coding questions
 - `orca-mini` - Smaller, faster
-
-Change the model in `.env`:
-
-```env
-OLLAMA_MODEL=mistral
-```
+- `moondream` - Vision AI for image analysis
+- `llava` - Alternative vision model
 
 ## Troubleshooting
 
-### Bot can't connect to Ollama
+### Common Issues
 
-Make sure Ollama is running and accessible. Test with:
-
+**Bot can't connect to Ollama**
 ```bash
+# Test Ollama connectivity
 curl http://localhost:11434/api/generate -d '{"model":"llama2","prompt":"Hello"}'
+
+# Check if Ollama is running
+docker ps | grep ollama
 ```
 
-### Audio quality issues
-
-Try increasing the Whisper model size in `.env`:
-
-```env
-WHISPER_MODEL=small
-```
-
-### Bot not responding
-
-Check the logs:
-
+**Audio quality issues**
 ```bash
+# Try increasing Whisper model size in .env
+WHISPER_MODEL=small
+
+# Check audio device permissions
 docker-compose logs -f mumble-bot
 ```
 
-### Services not starting
+**Services not starting**
+```bash
+# Check port availability
+netstat -an | grep -E "(48000|5000|5001|5002|5003|5004|5005|5006|8081)"
 
-Ensure all ports are available:
-- 48000 (Mumble - changed from 64738 to avoid Windows Hyper-V port conflicts)
-- 5000 (Whisper)
-- 5001 (Piper)
+# Check Docker logs
+docker-compose logs -f <service-name>
+```
+
+**Database connection issues**
+```bash
+# Check PostgreSQL status
+docker-compose logs -f postgres
+
+# Test database connection
+docker exec -it mumble-ai-postgres-1 psql -U mumble_user -d mumble_ai
+```
+
+**TTS not working**
+```bash
+# Check TTS service logs
+docker-compose logs -f piper-tts
+docker-compose logs -f silero-tts
+docker-compose logs -f chatterbox-tts
+
+# Test TTS API directly
+curl -X POST http://localhost:5001/api/tts -H "Content-Type: application/json" -d '{"text":"Hello world"}'
+```
+
+**Email not working**
+```bash
+# Check email service logs
+docker-compose logs -f email-summary-service
+
+# Test email configuration in web control panel
+# Go to http://localhost:5002 and test email settings
+```
+
+**Web client not loading**
+```bash
+# Check nginx logs
+docker-compose logs -f mumble-web-nginx
+
+# Verify SSL certificate
+curl -k https://localhost:8081
+```
+
+### Port Requirements
+
+Ensure these ports are available:
+- **48000** - Mumble Server (external)
+- **5000** - Faster Whisper (STT)
+- **5001** - Piper TTS
+- **5002** - Web Control Panel
+- **5003** - TTS Voice Generator
+- **5004** - Silero TTS
+- **5005** - Chatterbox TTS
+- **5006** - Email Summary Service
+- **8081** - Mumble Web (HTTPS)
+- **5060** - SIP Bridge
+- **10000-10010** - RTP (SIP Bridge)
 
 ## Stopping the Stack
 
@@ -556,7 +643,7 @@ Mumble-AI/
 │   ├── download_models.py
 │   ├── requirements.txt
 │   └── Dockerfile
-├── chatterbox-tts-service/     # Voice cloning TTS service (WORK IN PROGRESS)
+├── chatterbox-tts-service/     # Voice cloning TTS service
 │   ├── app.py
 │   ├── test_service.py
 │   ├── requirements.txt
@@ -593,15 +680,24 @@ Mumble-AI/
 │   ├── vendors/                # Third-party libraries
 │   ├── themes/                 # UI themes
 │   └── package.json
+├── email-summary-service/      # Email processing service
+│   ├── app.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── models/                     # AI model storage
 │   ├── whisper/                # Whisper models
 │   ├── piper/                  # Piper TTS models
-│   └── silero/                 # Silero TTS models
+│   ├── silero/                 # Silero TTS models
+│   └── chatterbox/             # Chatterbox TTS models
 └── docs/                       # Documentation
     ├── ARCHITECTURE.md
     ├── API.md
     ├── CONFIGURATION.md
-    └── TROUBLESHOOTING.md
+    ├── TROUBLESHOOTING.md
+    ├── PERSISTENT_MEMORIES_GUIDE.md
+    ├── EMAIL_SUMMARIES_GUIDE.md
+    ├── CHATTERBOX_INTEGRATION.md
+    └── CHATTERBOX_FINAL_SUMMARY.md
 ```
 
 ## Advanced Configuration
