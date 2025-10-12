@@ -2,7 +2,7 @@
 
 A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers with advanced speech recognition, multiple text-to-speech engines, intelligent memory systems, email integration, and voice cloning capabilities.
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 
@@ -722,12 +722,26 @@ deploy:
 
 Download additional voices from https://github.com/rhasspy/piper and update the download URLs in `web-control-panel/download_voices.py`.
 
+## Recent Updates
+
+### v1.2.0 - Memory Extraction & Reliability Improvements (January 15, 2025)
+- **Enhanced Memory Extraction**: Added robust retry logic (3 attempts) with 3-minute timeouts
+- **Improved Memory Limits**: Increased default memory limits from 3 to 10 items for better context
+- **Advanced AI Configuration**: Added semantic memory ranking and parallel processing options
+- **Better Error Handling**: Standardized error handling across all services with enhanced logging
+- **Increased Reliability**: Memory extraction now handles timeouts and network issues gracefully
+
+### Previous Updates
+- **v1.1.0**: Session management improvements and memory extraction fixes
+- **v1.0.0**: Initial release with core AI voice assistant features
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) - System design and component interaction
 - [API Reference](docs/API.md) - Complete API documentation
 - [Configuration](docs/CONFIGURATION.md) - Detailed configuration guide
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Memory Retry & Timeout Improvements](docs/CHANGELOG_MEMORY_RETRY_AND_TIMEOUT_IMPROVEMENTS.md) - Latest reliability enhancements
 - [Deduplication System](docs/CHANGELOG_DEDUPLICATION_SYSTEM.md) - Schedule and memory duplicate prevention
 - [Timestamp Formatting](docs/CHANGELOG_TIMESTAMP_NY_TIME.md) - 12-hour NY time display throughout web panel
 

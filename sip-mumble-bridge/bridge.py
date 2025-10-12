@@ -994,18 +994,37 @@ REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
-            response = requests.post(
-                f"{ollama_url}/api/generate",
-                json={
-                    'model': ollama_model,
-                    'prompt': extraction_prompt,
-                    'stream': False,
-                    'options': {'temperature': 0.3}  # Lower temp for more consistent extraction
-                },
-                timeout=30
-            )
+            # Retry logic for memory extraction (up to 3 attempts with 3 minute timeout)
+            max_retries = 3
+            retry_count = 0
+            response = None
 
-            if response.status_code == 200:
+            while retry_count < max_retries:
+                try:
+                    response = requests.post(
+                        f"{ollama_url}/api/generate",
+                        json={
+                            'model': ollama_model,
+                            'prompt': extraction_prompt,
+                            'stream': False,
+                            'options': {'temperature': 0.3}  # Lower temp for more consistent extraction
+                        },
+                        timeout=180  # 3 minutes timeout for memory extraction
+                    )
+                    break  # Success, exit retry loop
+                except requests.exceptions.Timeout as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Memory extraction timeout (attempt {retry_count}/{max_retries}), retrying...")
+                        time.sleep(2)  # Brief delay before retry
+                    else:
+                        logger.error(f"Memory extraction failed after {max_retries} attempts: {e}")
+                        return
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Network error during memory extraction: {e}")
+                    return
+
+            if response and response.status_code == 200:
                 result = response.json().get('response', '').strip()
 
                 # Try to parse and save memories
@@ -1752,7 +1771,7 @@ User: "What do I have next week?"
             if conn:
                 self.release_db_connection(conn)
 
-    def get_semantic_context(self, query_text: str, user_name: str, current_session_id: str, limit: int = 3) -> List[Dict]:
+    def get_semantic_context(self, query_text: str, user_name: str, current_session_id: str, limit: int = 10) -> List[Dict]:
         """Retrieve semantically similar messages from long-term memory"""
         # Generate embedding for the query
         query_embedding = self.generate_embedding(query_text)
@@ -1854,11 +1873,13 @@ User: "What do I have next week?"
             # Get bot persona from config
             persona = self.get_config('bot_persona', '')
 
-            # Get memory limits from config
-            short_term_limit = int(self.get_config('short_term_memory_limit', '3'))
-            long_term_limit = int(self.get_config('long_term_memory_limit', '3'))
+            # Get memory limits and advanced AI settings from config
+            short_term_limit = int(self.get_config('short_term_memory_limit', '10'))
+            long_term_limit = int(self.get_config('long_term_memory_limit', '10'))
+            use_semantic_ranking = self.get_config('use_semantic_memory_ranking', 'true').lower() == 'true'
+            enable_parallel = self.get_config('enable_parallel_processing', 'true').lower() == 'true'
 
-            logger.debug(f"Schedule query: {is_schedule_related}, Date context: {date_context}")
+            logger.debug(f"Schedule query: {is_schedule_related}, Date context: {date_context}, Semantic ranking: {use_semantic_ranking}, Parallel: {enable_parallel}")
 
             # Build the full prompt
             full_prompt = ""
@@ -1902,7 +1923,7 @@ SCHEDULING CAPABILITIES:
             # Get persistent memories (important saved information)
             persistent_memories = []
             if user_name:
-                persistent_memories = self.get_persistent_memories(user_name, limit=10)
+                persistent_memories = self.get_persistent_memories(user_name, limit=short_term_limit)
                 logger.info(f"Retrieved {len(persistent_memories)} persistent memories for {user_name}")
 
             # Get schedule events for the user (next 30 days)

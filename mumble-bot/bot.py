@@ -1159,21 +1159,40 @@ REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
-            response = requests.post(
-                f"{ollama_url}/api/generate",
-                json={
-                    'model': ollama_model,
-                    'prompt': extraction_prompt,
-                    'stream': False,
-                    'options': {
-                        'temperature': 0.2,  # Very low temp for consistent JSON
-                        'num_predict': 500   # Limit response length
-                    }
-                },
-                timeout=30
-            )
+            # Retry logic for memory extraction (up to 3 attempts with 3 minute timeout)
+            max_retries = 3
+            retry_count = 0
+            response = None
 
-            if response.status_code == 200:
+            while retry_count < max_retries:
+                try:
+                    response = requests.post(
+                        f"{ollama_url}/api/generate",
+                        json={
+                            'model': ollama_model,
+                            'prompt': extraction_prompt,
+                            'stream': False,
+                            'options': {
+                                'temperature': 0.2,  # Very low temp for consistent JSON
+                                'num_predict': 500   # Limit response length
+                            }
+                        },
+                        timeout=180  # 3 minutes timeout for memory extraction
+                    )
+                    break  # Success, exit retry loop
+                except requests.exceptions.Timeout as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Memory extraction timeout (attempt {retry_count}/{max_retries}), retrying...")
+                        time.sleep(2)  # Brief delay before retry
+                    else:
+                        logger.error(f"Memory extraction failed after {max_retries} attempts: {e}")
+                        return
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Network error during memory extraction: {e}")
+                    return
+
+            if response and response.status_code == 200:
                 result = response.json().get('response', '').strip()
                 logger.debug(f"Memory extraction raw response: {result[:200]}...")
 
@@ -1232,8 +1251,6 @@ JSON:"""
                 else:
                     logger.warning(f"Failed to extract valid JSON from memory extraction response")
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error during memory extraction: {e}")
         except Exception as e:
             logger.error(f"Error extracting memory: {e}", exc_info=True)
 

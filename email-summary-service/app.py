@@ -1467,21 +1467,40 @@ REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    'model': ollama_model,
-                    'prompt': extraction_prompt,
-                    'stream': False,
-                    'options': {
-                        'temperature': 0.2,  # Very low temp for consistent JSON
-                        'num_predict': 500   # Limit response length
-                    }
-                },
-                timeout=180  # 3 minutes for regular text
-            )
+            # Retry logic for memory extraction (up to 3 attempts with 3 minute timeout)
+            max_retries = 3
+            retry_count = 0
+            response = None
 
-            if response.status_code == 200:
+            while retry_count < max_retries:
+                try:
+                    response = requests.post(
+                        f"{OLLAMA_URL}/api/generate",
+                        json={
+                            'model': ollama_model,
+                            'prompt': extraction_prompt,
+                            'stream': False,
+                            'options': {
+                                'temperature': 0.2,  # Very low temp for consistent JSON
+                                'num_predict': 500   # Limit response length
+                            }
+                        },
+                        timeout=180  # 3 minutes timeout for memory extraction
+                    )
+                    break  # Success, exit retry loop
+                except requests.exceptions.Timeout as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Memory extraction timeout (attempt {retry_count}/{max_retries}), retrying...")
+                        time.sleep(2)  # Brief delay before retry
+                    else:
+                        logger.error(f"Memory extraction failed after {max_retries} attempts: {e}")
+                        return
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Network error during memory extraction: {e}")
+                    return
+
+            if response and response.status_code == 200:
                 result = response.json().get('response', '').strip()
                 logger.debug(f"Memory extraction raw response: {result[:200]}...")
 
@@ -2199,21 +2218,54 @@ REMEMBER: When in doubt, return []. Better to miss something than save junk!
 
 JSON:"""
 
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    'model': ollama_model,
-                    'prompt': extraction_prompt,
-                    'stream': False,
-                    'options': {
-                        'temperature': 0.2,
-                        'num_predict': 500
-                    }
-                },
-                timeout=180
-            )
+            # Retry logic for memory extraction (up to 3 attempts with 3 minute timeout)
+            max_retries = 3
+            retry_count = 0
+            response = None
 
-            if response.status_code == 200:
+            while retry_count < max_retries:
+                try:
+                    response = requests.post(
+                        f"{OLLAMA_URL}/api/generate",
+                        json={
+                            'model': ollama_model,
+                            'prompt': extraction_prompt,
+                            'stream': False,
+                            'options': {
+                                'temperature': 0.2,
+                                'num_predict': 500
+                            }
+                        },
+                        timeout=180  # 3 minutes timeout for memory extraction
+                    )
+                    break  # Success, exit retry loop
+                except requests.exceptions.Timeout as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Memory extraction (sync) timeout (attempt {retry_count}/{max_retries}), retrying...")
+                        time.sleep(2)  # Brief delay before retry
+                    else:
+                        logger.error(f"Memory extraction (sync) failed after {max_retries} attempts: {e}")
+                        results.append({
+                            'category': 'error',
+                            'content': 'Memory extraction failed - timeout',
+                            'importance': 0,
+                            'saved': False,
+                            'error': str(e)
+                        })
+                        return results
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Network error during memory extraction (sync): {e}")
+                    results.append({
+                        'category': 'error',
+                        'content': 'Memory extraction failed - network error',
+                        'importance': 0,
+                        'saved': False,
+                        'error': str(e)
+                    })
+                    return results
+
+            if response and response.status_code == 200:
                 result = response.json().get('response', '').strip()
                 logger.debug(f"Memory extraction (sync) raw response: {result[:200]}...")
 
@@ -3060,14 +3112,24 @@ User: "What's on my schedule?"
                 row = cursor.fetchone()
                 ollama_model = row[0] if row else 'llama3.2:latest'
 
+            # Get advanced AI settings from database
+            short_term_limit = 10  # default
+            try:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'short_term_memory_limit'")
+                row = cursor.fetchone()
+                if row:
+                    short_term_limit = int(row[0])
+            except:
+                pass
+
             # Get memories and schedule for context (user-specific if mapped)
-            memories = self.get_user_memories(mapped_user, limit=10)
+            memories = self.get_user_memories(mapped_user, limit=short_term_limit)
             schedule_events = self.get_upcoming_schedule(mapped_user, days_ahead=30)
 
             # NEW: Get thread conversation history
             thread_context = ""
             if thread_id:
-                thread_history = self.get_thread_history(thread_id, limit=10)
+                thread_history = self.get_thread_history(thread_id, limit=short_term_limit)
                 if thread_history:
                     thread_context = "\n📧 PREVIOUS MESSAGES IN THIS EMAIL THREAD:\n"
                     for msg in thread_history:
