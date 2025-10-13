@@ -11,6 +11,8 @@ Complete API documentation for all Mumble AI Bot services.
 - [Silero TTS API](#silero-tts-api) (Port 5004)
 - [Chatterbox TTS API](#chatterbox-tts-api) (Port 5005)
 - [Email Summary Service API](#email-summary-service-api) (Port 5006)
+- [Advanced Search System](#advanced-search-system)
+- [Topic State Tracking](#topic-state-tracking)
 - [SIP Bridge](#sip-bridge) (Port 5060)
 - [Mumble Web Client](#mumble-web-client) (Port 8081)
 
@@ -34,6 +36,8 @@ Base URL: `http://localhost:5002`
 - [Email Mappings](#email-mappings)
 - [Email Logs](#email-logs)
 - [Schedule Management](#schedule-management)
+- [Advanced Search System](#advanced-search-system)
+- [Topic State Tracking](#topic-state-tracking)
 - [Advanced Settings](#advanced-settings)
 
 ## Statistics
@@ -933,6 +937,223 @@ Email processing and daily summary service.
 - Attachment processing (images, PDFs, Word docs)
 - Vision AI integration for image analysis
 - Thread-aware email conversations
+
+## Advanced Search System
+
+### Three-Tier Search for Schedule Events
+
+The system now supports a sophisticated three-tier search approach for finding schedule events with AI-powered semantic understanding.
+
+#### Search Schedule Events
+
+**Endpoint:** `GET /api/schedule/search`
+
+**Query Parameters:**
+- `query` (required) - Search query string
+- `user` (optional) - Filter by specific user
+- `start_date` (optional) - Start date filter (YYYY-MM-DD)
+- `end_date` (optional) - End date filter (YYYY-MM-DD)
+- `tier` (optional) - Force specific search tier (1=semantic, 2=fuzzy, 3=fulltext)
+
+**Example Request:**
+```bash
+GET /api/schedule/search?query=meeting with john&user=alice&tier=1
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "id": 123,
+      "title": "Team Meeting with John",
+      "event_date": "2025-01-20",
+      "event_time": "14:00:00",
+      "description": "Weekly team standup",
+      "importance": 7,
+      "user_name": "alice"
+    }
+  ],
+  "search_metadata": {
+    "tier_used": 1,
+    "search_duration": 2.34,
+    "total_results": 1,
+    "tier_performance": {
+      "tier1_duration": 2.34,
+      "tier2_duration": 0.12,
+      "tier3_duration": 0.05
+    }
+  }
+}
+```
+
+**Search Tiers:**
+
+1. **Tier 1 - Semantic Search (AI-Powered)**
+   - Uses Ollama LLM for natural language understanding
+   - Handles complex queries like "meeting with John", "doctor appointment"
+   - 30-second timeout with graceful fallback
+   - Highest accuracy for semantic matches
+
+2. **Tier 2 - Fuzzy Search (Pattern Matching)**
+   - Advanced fuzzy string matching algorithms
+   - Handles typos, partial matches, and similar text
+   - Fast local processing
+   - Used when semantic search times out
+
+3. **Tier 3 - Full-Text Search (Database)**
+   - PostgreSQL full-text search with GIN indexes
+   - Exact and partial text matching
+   - Always available as final fallback
+   - Optimized database queries
+
+#### Search Performance Metrics
+
+**Endpoint:** `GET /api/search/metrics`
+
+**Response:**
+```json
+{
+  "total_searches": 150,
+  "tier_usage": {
+    "tier1": 45,
+    "tier2": 32,
+    "tier3": 73
+  },
+  "average_duration": {
+    "tier1": 2.1,
+    "tier2": 0.15,
+    "tier3": 0.08
+  },
+  "success_rate": {
+    "tier1": 0.89,
+    "tier2": 0.95,
+    "tier3": 0.99
+  }
+}
+```
+
+## Topic State Tracking
+
+### Conversation Topic Management
+
+The system now tracks conversation topics and their resolution state for improved context awareness.
+
+#### Get Topic State for Session
+
+**Endpoint:** `GET /api/topics/state/{session_id}`
+
+**Response:**
+```json
+{
+  "session_id": "abc123",
+  "current_topic": {
+    "state": "active",
+    "summary": "Discussing project timeline and deadlines",
+    "started_at": "2025-01-15T10:30:00Z",
+    "message_count": 8
+  },
+  "recent_topics": [
+    {
+      "state": "resolved",
+      "summary": "Meeting scheduling for next week",
+      "resolved_at": "2025-01-15T10:25:00Z"
+    }
+  ]
+}
+```
+
+#### Update Topic State
+
+**Endpoint:** `POST /api/topics/state/{session_id}`
+
+**Request Body:**
+```json
+{
+  "state": "resolved",
+  "summary": "Project timeline discussion completed"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "updated_topic": {
+    "state": "resolved",
+    "summary": "Project timeline discussion completed",
+    "updated_at": "2025-01-15T10:35:00Z"
+  }
+}
+```
+
+#### Generate Topic Summary
+
+**Endpoint:** `POST /api/topics/summarize`
+
+**Request Body:**
+```json
+{
+  "session_id": "abc123",
+  "conversation_messages": [
+    {
+      "role": "user",
+      "message": "I need to schedule a meeting for next week",
+      "timestamp": "2025-01-15T10:30:00Z"
+    },
+    {
+      "role": "assistant", 
+      "message": "I can help you schedule that meeting. What day works best?",
+      "timestamp": "2025-01-15T10:30:15Z"
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "topic_summary": "User requesting help with scheduling a meeting for next week",
+  "topic_state": "active",
+  "confidence": 0.92
+}
+```
+
+#### Get Conversation History with Topics
+
+**Endpoint:** `GET /api/conversation/history`
+
+**Query Parameters:**
+- `user` (optional) - Filter by user
+- `session_id` (optional) - Filter by session
+- `include_topics` (optional) - Include topic information (default: true)
+- `limit` (optional) - Number of messages to return (default: 50)
+
+**Response:**
+```json
+{
+  "messages": [
+    {
+      "id": 123,
+      "user_name": "alice",
+      "session_id": "abc123",
+      "role": "user",
+      "message": "I need to schedule a meeting",
+      "message_type": "voice",
+      "timestamp": "2025-01-15T10:30:00Z",
+      "topic_state": "active",
+      "topic_summary": "Meeting scheduling discussion"
+    }
+  ],
+  "total_count": 1
+}
+```
+
+### Topic State Values
+
+- `active` - Current conversation topic being discussed
+- `resolved` - Topic that has been fully addressed
+- `switched` - Topic that has been changed or abandoned
 
 ## SIP Bridge
 

@@ -320,6 +320,10 @@ class MumbleAIBot:
         self.session_lock = threading.Lock()
         self.embedding_cache = {}  # Cache embeddings to reduce API calls
         
+        # Topic state tracking
+        self.active_topics = {}  # Track current topic per user/session
+        self.resolved_topics = {}  # Track recently resolved topics per user/session
+        
         # Initialize smart cache system for performance
         self.smart_cache = SmartCache()
         
@@ -655,6 +659,9 @@ class MumbleAIBot:
             # Save user message SYNCHRONOUSLY first so it's in the context for immediate follow-ups
             self._save_message_sync(sender_name, sender_session, 'text', 'user', message, session_id)
 
+            # Track new topics (before getting response)
+            self.track_new_topic(message, sender_name, session_id)
+
             # Get Ollama response (now with user message in DB)
             logger.info(f"Getting Ollama response for text from {sender_name}...")
             response_text = self.get_ollama_response(message, user_name=sender_name, session_id=session_id)
@@ -814,6 +821,7 @@ class MumbleAIBot:
         try:
             embedding_model = self.get_config('embedding_model', 'nomic-embed-text:latest')
             ollama_url = self.get_config('ollama_url', self.ollama_url)
+            logger.debug(f"Generating embedding using model: {embedding_model}")
 
             response = requests.post(
                 f"{ollama_url}/api/embeddings",
@@ -821,7 +829,7 @@ class MumbleAIBot:
                     'model': embedding_model,
                     'prompt': text
                 },
-                timeout=30
+                timeout=300  # 5 minutes for embedding generation
             )
 
             if response.status_code == 200:
@@ -1059,6 +1067,7 @@ class MumbleAIBot:
             ollama_url = self.get_config('ollama_url', self.ollama_url)
             # Use specialized memory extraction model for better precision
             ollama_model = self.get_config('memory_extraction_model', 'qwen2.5:3b')
+            logger.info(f"Memory extraction using model: {ollama_model}")
 
             # Get current date for context
             from zoneinfo import ZoneInfo
@@ -1177,7 +1186,7 @@ JSON:"""
                                 'num_predict': 500   # Limit response length
                             }
                         },
-                        timeout=180  # 3 minutes timeout for memory extraction
+                        timeout=300  # 5 minutes timeout for memory extraction
                     )
                     break  # Success, exit retry loop
                 except requests.exceptions.Timeout as e:
@@ -1794,6 +1803,11 @@ JSON:"""
     def update_schedule_event(self, event_id: int, title: str = None, event_date: str = None,
                              event_time: str = None, description: str = None, importance: int = None) -> bool:
         """Update an existing schedule event"""
+        # Validate event_id is an integer
+        if not isinstance(event_id, int):
+            logger.error(f"Invalid event_id type: {type(event_id)}. Expected int, got {event_id}")
+            return False
+            
         conn = None
         try:
             conn = self.get_db_connection()
@@ -1880,6 +1894,294 @@ JSON:"""
         finally:
             if conn:
                 self.release_db_connection(conn)
+
+    def search_schedule_by_title(self, user_name: str, search_query: str, start_date: str = None, 
+                                end_date: str = None, timeout: int = 300, max_retries: int = 3) -> List[Dict]:
+        """
+        Three-tier search for schedule events by title/name with timeout and retry logic
+        
+        Tier 1: Semantic AI search (primary)
+        Tier 2: Fuzzy matching (fallback) 
+        Tier 3: Full-text search (verification, runs in parallel)
+        """
+        import signal
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+        
+        logger.info(f"Starting three-tier search for '{search_query}' by {user_name}")
+        search_start_time = time.time()
+        
+        # Get all events for the user in the date range first
+        all_events = self.get_schedule_events(user_name, start_date, end_date, limit=100)
+        if not all_events:
+            logger.info("No events found for user in date range")
+            return []
+        
+        results = []
+        tier_used = "none"
+        verification_results = []
+        
+        try:
+            # Start Tier 3 (verification) in parallel with Tier 1/2
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # Submit Tier 3 verification search
+                tier3_future = executor.submit(self._tier3_fulltext_search, user_name, search_query, start_date, end_date)
+                
+                # Try Tier 1 (Semantic AI) first
+                try:
+                    tier1_future = executor.submit(self._tier1_semantic_search, user_name, search_query, all_events, timeout)
+                    results = tier1_future.result(timeout=timeout)
+                    tier_used = "tier1"
+                    logger.info(f"Tier 1 (semantic) found {len(results)} results")
+                except (FutureTimeoutError, Exception) as e:
+                    logger.warning(f"Tier 1 (semantic) failed: {e}")
+                    
+                    # Fallback to Tier 2 (Fuzzy matching)
+                    try:
+                        results = self._tier2_fuzzy_search(search_query, all_events)
+                        tier_used = "tier2"
+                        logger.info(f"Tier 2 (fuzzy) found {len(results)} results")
+                    except Exception as e2:
+                        logger.error(f"Tier 2 (fuzzy) also failed: {e2}")
+                        results = []
+                
+                # Get Tier 3 verification results
+                try:
+                    verification_results = tier3_future.result(timeout=timeout)
+                    logger.info(f"Tier 3 (fulltext) found {len(verification_results)} results")
+                except (FutureTimeoutError, Exception) as e:
+                    logger.warning(f"Tier 3 (fulltext) failed: {e}")
+                    verification_results = []
+        
+        except Exception as e:
+            logger.error(f"Search failed completely: {e}")
+            return []
+        
+        # Log search metrics
+        search_duration = time.time() - search_start_time
+        logger.info(f"Search completed: tier={tier_used}, duration={search_duration:.2f}s, "
+                   f"results={len(results)}, verification={len(verification_results)}")
+        
+        # Compare results if both tiers found something
+        if results and verification_results:
+            self._compare_search_results(results, verification_results, search_query)
+        
+        return results
+
+    def _tier1_semantic_search(self, user_name: str, search_query: str, events: List[Dict], timeout: int) -> List[Dict]:
+        """Tier 1: Use Ollama for semantic event search"""
+        try:
+            # Extract search terms from natural language
+            extraction_prompt = f"""Extract the main event name or keywords from this query: "{search_query}"
+
+Return only the key terms that would be in an event title, no extra words.
+Examples:
+- "when is my baby shower" → "baby shower"
+- "find my dentist appointment" → "dentist appointment" 
+- "what time is the meeting" → "meeting"
+
+Key terms:"""
+
+            # Get Ollama URL and model from config
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('ollama_model', 'llama3.2:latest')
+            
+            # Call Ollama with 5 minute timeout
+            response = requests.post(
+                f'{ollama_url}/api/generate',
+                json={
+                    'model': ollama_model,
+                    'prompt': extraction_prompt,
+                    'stream': False,
+                    'options': {'temperature': 0.1}
+                },
+                timeout=300  # 5 minutes
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"Ollama API error: {response.status_code}")
+            
+            extracted_terms = response.json().get('response', '').strip()
+            if not extracted_terms:
+                raise Exception("No terms extracted from query")
+            
+            logger.info(f"Extracted search terms: '{extracted_terms}'")
+            
+            # Now use extracted terms to find matching events
+            matches = []
+            for event in events:
+                similarity = self._calculate_semantic_similarity(extracted_terms, event['title'])
+                if similarity > 0.3:  # Threshold for semantic match
+                    matches.append((event, similarity))
+            
+            # Sort by similarity and return events
+            matches.sort(key=lambda x: x[1], reverse=True)
+            return [event for event, _ in matches[:10]]  # Top 10 matches
+            
+        except Exception as e:
+            logger.error(f"Tier 1 semantic search failed: {e}")
+            raise
+
+    def _tier2_fuzzy_search(self, search_query: str, events: List[Dict]) -> List[Dict]:
+        """Tier 2: Fuzzy string matching fallback"""
+        try:
+            matches = []
+            query_lower = search_query.lower()
+            
+            for event in events:
+                title_lower = event['title'].lower()
+                
+                # Direct substring match
+                if query_lower in title_lower:
+                    matches.append((event, 1.0))
+                    continue
+                
+                # Word-by-word matching
+                query_words = set(query_lower.split())
+                title_words = set(title_lower.split())
+                
+                if query_words.intersection(title_words):
+                    # Calculate word overlap score
+                    overlap = len(query_words.intersection(title_words))
+                    total_words = len(query_words.union(title_words))
+                    score = overlap / total_words if total_words > 0 else 0
+                    
+                    if score > 0.2:  # Threshold for word overlap
+                        matches.append((event, score))
+            
+            # Sort by score and return events
+            matches.sort(key=lambda x: x[1], reverse=True)
+            return [event for event, _ in matches[:10]]  # Top 10 matches
+            
+        except Exception as e:
+            logger.error(f"Tier 2 fuzzy search failed: {e}")
+            raise
+
+    def _tier3_fulltext_search(self, user_name: str, search_query: str, start_date: str = None, end_date: str = None) -> List[Dict]:
+        """Tier 3: PostgreSQL full-text search verification"""
+        conn = None
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return []
+
+            cursor = conn.cursor()
+            
+            # Sanitize search query for tsquery - extract just words
+            import re
+            # Extract alphanumeric words and join with spaces
+            words = re.findall(r'\b\w+\b', search_query)
+            if not words:
+                return []
+            # Join words with & for AND query, or use | for OR
+            sanitized_query = ' & '.join(words[:5])  # Limit to first 5 words
+            
+            # Build full-text search query
+            query = """
+                SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
+                       ts_rank(to_tsvector('english', title), to_tsquery('english', %s)) as rank
+                FROM schedule_events
+                WHERE active = TRUE
+                  AND to_tsvector('english', title) @@ to_tsquery('english', %s)
+            """
+            params = [sanitized_query, sanitized_query]
+
+            if user_name:
+                query += " AND user_name = %s"
+                params.append(user_name)
+
+            if start_date:
+                query += " AND event_date >= %s"
+                params.append(start_date)
+
+            if end_date:
+                query += " AND event_date <= %s"
+                params.append(end_date)
+
+            query += " ORDER BY rank DESC, event_date, event_time LIMIT 10"
+
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            cursor.close()
+
+            events = []
+            for row in results:
+                events.append({
+                    'id': row[0],
+                    'user_name': row[1],
+                    'title': row[2],
+                    'event_date': row[3],
+                    'event_time': row[4],
+                    'description': row[5],
+                    'importance': row[6],
+                    'created_at': row[7],
+                    'rank': row[8]
+                })
+
+            return events
+
+        except Exception as e:
+            logger.error(f"Tier 3 fulltext search failed: {e}")
+            return []
+        finally:
+            if conn:
+                self.release_db_connection(conn)
+
+    def _calculate_semantic_similarity(self, query: str, title: str) -> float:
+        """Calculate semantic similarity between query and title using simple word overlap"""
+        query_words = set(query.lower().split())
+        title_words = set(title.lower().split())
+        
+        if not query_words or not title_words:
+            return 0.0
+        
+        intersection = query_words.intersection(title_words)
+        union = query_words.union(title_words)
+        
+        return len(intersection) / len(union) if union else 0.0
+
+    def _compare_search_results(self, tier1_results: List[Dict], tier3_results: List[Dict], search_query: str):
+        """Compare and log differences between search tiers"""
+        tier1_titles = {event['title'] for event in tier1_results}
+        tier3_titles = {event['title'] for event in tier3_results}
+        
+        only_tier1 = tier1_titles - tier3_titles
+        only_tier3 = tier3_titles - tier1_titles
+        common = tier1_titles.intersection(tier3_titles)
+        
+        logger.info(f"Search comparison for '{search_query}': "
+                   f"common={len(common)}, only_tier1={len(only_tier1)}, only_tier3={len(only_tier3)}")
+        
+        if only_tier1:
+            logger.debug(f"Only Tier 1 found: {list(only_tier1)}")
+        if only_tier3:
+            logger.debug(f"Only Tier 3 found: {list(only_tier3)}")
+
+    def extract_event_name_from_query(self, query: str) -> Optional[str]:
+        """Extract event name from natural language query"""
+        query_lower = query.lower()
+        
+        # Common patterns for event name queries
+        patterns = [
+            r"when is my (.+?)(?:\?|$)",
+            r"when's my (.+?)(?:\?|$)", 
+            r"what time is my (.+?)(?:\?|$)",
+            r"find my (.+?)(?:\?|$)",
+            r"where is my (.+?)(?:\?|$)",
+            r"tell me about my (.+?)(?:\?|$)"
+        ]
+        
+        import re
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                event_name = match.group(1).strip()
+                # Clean up common words
+                event_name = re.sub(r'\b(the|a|an|my|our)\b', '', event_name).strip()
+                if event_name:
+                    return event_name
+        
+        return None
 
     def parse_date_expression(self, date_expr: str, reference_date: datetime = None) -> Optional[str]:
         """Parse natural language date expressions into YYYY-MM-DD format"""
@@ -2012,6 +2314,7 @@ JSON:"""
         try:
             ollama_url = self.get_config('ollama_url', self.ollama_url)
             ollama_model = self.get_config('ollama_model', self.ollama_model)
+            logger.info(f"Schedule action extraction using model: {ollama_model}")
 
             # Get current date for context
             from zoneinfo import ZoneInfo
@@ -2046,8 +2349,11 @@ If scheduling action is needed, extract:
 
 CRITICAL INSTRUCTIONS:
 - ONLY use action "ADD" if the user is CREATING or SCHEDULING a NEW event
+- ONLY use action "UPDATE" if the user explicitly wants to MODIFY an existing event (e.g., "change my meeting time", "reschedule my appointment")
+- ONLY use action "DELETE" if the user explicitly wants to CANCEL or REMOVE an event (e.g., "cancel my meeting", "delete my appointment")
 - If the user is ASKING, QUERYING, READING, or CHECKING their schedule, ALWAYS use action "NOTHING"
 - DO NOT create events when the user asks "what's on my calendar", "tell me my schedule", "what do I have", "do I have anything", etc.
+- DO NOT update events when the user is just asking about existing events
 - When in doubt, use "NOTHING" - it's better to not create than to create a duplicate
 
 IMPORTANT: For relative dates like "next Friday", just return "next Friday" - do NOT calculate the actual date.
@@ -2076,6 +2382,15 @@ User: "Do I have anything tomorrow?"
 
 User: "What do I have next week?"
 {{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "Do I have any travel dates for the month of October?"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "Tell me about my travel plans"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
+
+User: "Do you know if I've got any meetings tomorrow?"
+{{"action": "NOTHING", "title": null, "date_expression": null, "time": null, "description": null, "importance": 5, "event_id": null}}
 """
 
             response = requests.post(
@@ -2086,7 +2401,7 @@ User: "What do I have next week?"
                     'stream': False,
                     'temperature': 0.1
                 },
-                timeout=30
+                timeout=300  # 5 minutes for schedule action extraction
             )
 
             if response.status_code == 200:
@@ -2114,21 +2429,39 @@ User: "What do I have next week?"
                         if event_id:
                             logger.info(f"Added schedule event {event_id} for {user_name}: {result.get('title')} on {parsed_date}")
 
-                    elif action == 'UPDATE' and result.get('event_id'):
-                        # Parse the date expression if present
+                    elif action == 'UPDATE':
+                        # Find matching event by title and/or date instead of using LLM-provided event_id
+                        title_search = result.get('title', '')
                         date_expression = result.get('date_expression') or result.get('date')
-                        parsed_date = self.parse_date_expression(date_expression, current_datetime) if date_expression else None
-
-                        success = self.update_schedule_event(
-                            event_id=result.get('event_id'),
-                            title=result.get('title'),
-                            event_date=parsed_date,
-                            event_time=result.get('time'),
-                            description=result.get('description'),
-                            importance=result.get('importance')
-                        )
-                        if success:
-                            logger.info(f"Updated schedule event {result.get('event_id')} for {user_name}")
+                        
+                        if title_search:
+                            events = self.get_schedule_events(user_name=user_name)
+                            matching_event = None
+                            
+                            # Find event by title (case-insensitive partial match)
+                            for event in events:
+                                if title_search.lower() in event['title'].lower():
+                                    matching_event = event
+                                    break
+                            
+                            if matching_event:
+                                # Parse the date expression if present
+                                parsed_date = self.parse_date_expression(date_expression, current_datetime) if date_expression else None
+                                
+                                success = self.update_schedule_event(
+                                    event_id=matching_event['id'],  # Use actual numeric ID
+                                    title=result.get('title') if result.get('title') != title_search else None,
+                                    event_date=parsed_date,
+                                    event_time=result.get('time'),
+                                    description=result.get('description'),
+                                    importance=result.get('importance')
+                                )
+                                if success:
+                                    logger.info(f"Updated schedule event {matching_event['id']} for {user_name}")
+                            else:
+                                logger.warning(f"No matching event found for update: '{title_search}'")
+                        else:
+                            logger.warning(f"UPDATE action requires a title to find the event to update")
 
                     elif action == 'DELETE':
                         # Find and delete matching events
@@ -2167,16 +2500,17 @@ User: "What do I have next week?"
             # Get similarity threshold from config
             threshold = float(self.get_config('semantic_similarity_threshold', '0.7'))
 
-            # Find similar messages from past conversations (excluding current session)
+            # Find similar messages from past conversations (excluding current session and resolved topics)
             cursor.execute(
                 """
-                SELECT id, role, message, message_type, timestamp, embedding,
+                SELECT id, role, message, message_type, timestamp, embedding, topic_state,
                        cosine_similarity(%s::FLOAT8[], embedding) as similarity
                 FROM conversation_history
                 WHERE user_name = %s
                   AND session_id != %s
                   AND embedding IS NOT NULL
                   AND cosine_similarity(%s::FLOAT8[], embedding) > %s
+                  AND (topic_state IS NULL OR topic_state != 'resolved')
                 ORDER BY similarity DESC, timestamp DESC
                 LIMIT %s
                 """,
@@ -2193,7 +2527,8 @@ User: "What do I have next week?"
                     'message': row[2],
                     'message_type': row[3],
                     'timestamp': row[4],
-                    'similarity': row[6]
+                    'topic_state': row[6],
+                    'similarity': row[7]
                 })
 
             return context
@@ -2219,9 +2554,35 @@ User: "What do I have next week?"
         ollama_url = self.get_config('ollama_url', self.ollama_url)
         ollama_model = self.get_config('ollama_model', self.ollama_model)
         use_validation = self.get_config('use_response_validation', 'false').lower() == 'true'
+        logger.info(f"Generating response using model: {ollama_model}")
+
+        # Detect conversation closure before building prompt
+        closure_detected, closure_type = self.detect_conversation_closure(text, user_name, session_id)
+        if closure_detected:
+            logger.info(f"Conversation closure detected: {closure_type}")
+            # Mark previous topic as resolved
+            self.mark_topic_resolved(user_name, session_id, f"Resolved via {closure_type}")
 
         # Build prompt with conversation history
         prompt = self.build_prompt_with_context(text, user_name, session_id)
+
+        # Adjust generation parameters based on closure detection
+        if closure_detected:
+            # Shorter, warmer responses for closure messages
+            generation_options = {
+                'temperature': 0.9,  # More natural/warm
+                'top_p': 0.95,  # More creative
+                'num_predict': 30,   # Very brief
+                'stop': ['\n\n', 'User:', 'Assistant:']
+            }
+        else:
+            # Standard parameters for regular responses
+            generation_options = {
+                'temperature': 0.7,  # Lower temperature for more consistent, focused responses
+                'top_p': 0.9,  # Nucleus sampling for better quality
+                'num_predict': 100,  # Limit response length (roughly 1-2 sentences)
+                'stop': ['\n\n', 'User:', 'Assistant:']  # Stop at conversation breaks
+            }
 
         max_attempts = 2 if use_validation else 1
         for attempt in range(max_attempts):
@@ -2231,19 +2592,19 @@ User: "What do I have next week?"
                     'model': ollama_model,
                     'prompt': prompt,
                     'stream': False,
-                    'options': {
-                        'temperature': 0.7,  # Lower temperature for more consistent, focused responses
-                        'top_p': 0.9,  # Nucleus sampling for better quality
-                        'num_predict': 100,  # Limit response length (roughly 1-2 sentences)
-                        'stop': ['\n\n', 'User:', 'Assistant:']  # Stop at conversation breaks
-                    }
+                    'options': generation_options
                 },
-                timeout=60
+                timeout=300  # 5 minutes for main response generation
             )
 
             if response.status_code == 200:
                 generated_response = response.json().get('response', 'I did not understand that.')
-                
+
+                # Log warning if response is empty
+                if not generated_response or not generated_response.strip():
+                    logger.warning(f"Empty LLM response received. Model: {ollama_model}, User query: '{text[:100]}...'")
+                    generated_response = "I did not understand that."
+
                 # Validate response if enabled
                 if use_validation and attempt < max_attempts - 1:
                     is_valid, reason = self.validate_response(generated_response, text, user_name)
@@ -2336,6 +2697,7 @@ Reason: [brief explanation]"""
 
             ollama_url = self.get_config('ollama_url', self.ollama_url)
             ollama_model = self.get_config('ollama_model', self.ollama_model)
+            logger.info(f"Response validation using model: {ollama_model}")
 
             validation_response = requests.post(
                 f"{ollama_url}/api/generate",
@@ -2348,7 +2710,7 @@ Reason: [brief explanation]"""
                         'num_predict': 100
                     }
                 },
-                timeout=15  # Shorter timeout for validation
+                timeout=60  # 1 minute for validation
             )
 
             if validation_response.status_code == 200:
@@ -2378,10 +2740,19 @@ Reason: [brief explanation]"""
             'busy', 'available', 'plans', 'what\'s coming up',
             'tomorrow', 'today', 'tonight', 'next week', 'this week',
             'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-            'when is', 'what time', 'upcoming'
+            'when is', 'what time', 'upcoming', 'when\'s my', 'find my', 'tell me about my'
         ]
         message_lower = message.lower()
         return any(keyword in message_lower for keyword in schedule_keywords)
+
+    def is_event_name_query(self, message):
+        """Detect if user is asking about a specific event by name"""
+        event_name_patterns = [
+            'when is my', 'when\'s my', 'what time is my', 'find my',
+            'where is my', 'tell me about my', 'show me my'
+        ]
+        message_lower = message.lower()
+        return any(pattern in message_lower for pattern in event_name_patterns)
 
     def extract_date_context(self, message):
         """Extract date context from user query for smart filtering"""
@@ -2406,6 +2777,267 @@ Reason: [brief explanation]"""
         # Default to full calendar view
         return 'all'
 
+    def detect_conversation_closure(self, text, user_name, session_id):
+        """Detect if user message indicates conversation closure using hybrid approach"""
+        try:
+            text_lower = text.lower().strip()
+            
+            # Pattern-based detection (fast)
+            gratitude_patterns = [
+                'thank you', 'thanks', 'appreciate', 'you\'re the best', 'lifesaver',
+                'perfect', 'awesome', 'great', 'excellent', 'wonderful'
+            ]
+            
+            acknowledgment_patterns = [
+                'ok', 'okay', 'got it', 'understood', 'sounds good', 'alright',
+                'cool', 'nice', 'sweet', 'amazing'
+            ]
+            
+            affection_patterns = [
+                '❤️', '💕', '💖', 'baby', 'love you', 'honey', 'sweetie', 'dear'
+            ]
+            
+            # Check for gratitude + acknowledgment
+            has_gratitude = any(pattern in text_lower for pattern in gratitude_patterns)
+            has_acknowledgment = any(pattern in text_lower for pattern in acknowledgment_patterns)
+            has_affection = any(pattern in text_lower for pattern in affection_patterns)
+            
+            # Strong closure signals
+            if has_gratitude and (has_acknowledgment or has_affection):
+                return True, 'gratitude_acknowledgment'
+            elif has_gratitude and len(text.split()) <= 10:  # Short gratitude
+                return True, 'gratitude'
+            elif has_acknowledgment and has_affection:
+                return True, 'acknowledgment_affection'
+            
+            # LLM-based analysis for ambiguous cases
+            if has_gratitude or has_acknowledgment:
+                return self._analyze_closure_with_llm(text, user_name, session_id)
+            
+            return False, 'none'
+            
+        except Exception as e:
+            logger.error(f"Error detecting conversation closure: {e}")
+            return False, 'error'
+
+    def _analyze_closure_with_llm(self, text, user_name, session_id):
+        """Use LLM to analyze if message indicates topic closure"""
+        try:
+            # Get recent conversation context
+            recent_history = self.get_conversation_history(session_id=session_id, limit=5)
+            context = ""
+            for role, message, msg_type, timestamp in recent_history:
+                context += f"{role}: {message}\n"
+            
+            analysis_prompt = f"""Analyze if this user message indicates they are satisfied with the previous response and the topic is resolved:
+
+Recent conversation:
+{context}
+User: {text}
+
+Does this message indicate:
+1. Gratitude/acknowledgment that the previous topic is resolved?
+2. Satisfaction with the information provided?
+3. A desire to move on from the current topic?
+
+Answer ONLY: YES or NO
+Then briefly explain why in 5 words or less."""
+
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('ollama_model', self.ollama_model)
+            
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    'model': ollama_model,
+                    'prompt': analysis_prompt,
+                    'stream': False,
+                    'options': {
+                        'temperature': 0.1,
+                        'num_predict': 20
+                    }
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json().get('response', '').strip().upper()
+                if result.startswith('YES'):
+                    return True, 'llm_analysis'
+                else:
+                    return False, 'llm_analysis'
+            else:
+                # Fallback to pattern-based result
+                return False, 'llm_fallback'
+                
+        except Exception as e:
+            logger.error(f"Error in LLM closure analysis: {e}")
+            return False, 'llm_error'
+
+    def mark_topic_resolved(self, user_name, session_id, topic_summary=None):
+        """Mark the current topic as resolved and update tracking"""
+        try:
+            session_key = f"{user_name}_{session_id}"
+            
+            # Get current active topic
+            current_topic = self.active_topics.get(session_key)
+            if current_topic:
+                # Move to resolved topics
+                if session_key not in self.resolved_topics:
+                    self.resolved_topics[session_key] = []
+                self.resolved_topics[session_key].append({
+                    'topic': current_topic,
+                    'summary': topic_summary,
+                    'timestamp': datetime.now()
+                })
+                
+                # Keep only last 5 resolved topics
+                if len(self.resolved_topics[session_key]) > 5:
+                    self.resolved_topics[session_key] = self.resolved_topics[session_key][-5:]
+                
+                # Clear active topic
+                del self.active_topics[session_key]
+                
+                # Update database
+                self._update_topic_state_in_db(user_name, session_id, 'resolved', topic_summary)
+                
+                logger.info(f"Marked topic as resolved for {user_name}: {current_topic}")
+            
+        except Exception as e:
+            logger.error(f"Error marking topic resolved: {e}")
+
+    def get_active_topic(self, user_name, session_id):
+        """Get the current active topic for a user/session"""
+        session_key = f"{user_name}_{session_id}"
+        return self.active_topics.get(session_key)
+
+    def detect_topic_switch(self, current_message, conversation_history):
+        """Detect if user is switching to a new topic"""
+        try:
+            if not conversation_history or len(conversation_history) < 2:
+                return False
+            
+            # Get the last few messages
+            recent_messages = conversation_history[:3]
+            
+            # Simple heuristics for topic switching
+            current_lower = current_message.lower()
+            
+            # New question patterns
+            new_topic_indicators = [
+                'what about', 'how about', 'can you', 'do you know',
+                'tell me about', 'i need to', 'i want to', 'i have a question',
+                'quick question', 'another thing', 'also', 'by the way'
+            ]
+            
+            # Check if current message starts a new topic
+            if any(indicator in current_lower for indicator in new_topic_indicators):
+                return True
+            
+            # Check for topic shift keywords
+            topic_shift_keywords = [
+                'actually', 'wait', 'oh', 'hey', 'so', 'anyway', 'moving on',
+                'different topic', 'change of subject'
+            ]
+            
+            if any(keyword in current_lower for keyword in topic_shift_keywords):
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error detecting topic switch: {e}")
+            return False
+
+    def _update_topic_state_in_db(self, user_name, session_id, topic_state, topic_summary=None):
+        """Update topic state in database"""
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE conversation_history 
+                SET topic_state = %s, topic_summary = %s
+                WHERE user_name = %s AND session_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (topic_state, topic_summary, user_name, session_id)
+            )
+            conn.commit()
+            cursor.close()
+            
+        except Exception as e:
+            logger.error(f"Error updating topic state in DB: {e}")
+
+    def track_new_topic(self, current_message, user_name, session_id):
+        """Detect and track new topics when they emerge"""
+        try:
+            session_key = f"{user_name}_{session_id}"
+            
+            # Check if this is a new topic (not a closure message)
+            closure_detected, _ = self.detect_conversation_closure(current_message, user_name, session_id)
+            if closure_detected:
+                return  # Don't track closure messages as new topics
+            
+            # Check if this is a topic switch
+            recent_history = self.get_conversation_history(session_id=session_id, limit=5)
+            is_topic_switch = self.detect_topic_switch(current_message, recent_history)
+            
+            # Simple topic detection based on question patterns or new requests
+            current_lower = current_message.lower()
+            new_topic_indicators = [
+                'what', 'how', 'when', 'where', 'why', 'can you', 'do you know',
+                'tell me', 'i need', 'i want', 'help me', 'find my', 'show me'
+            ]
+            
+            is_new_topic = any(indicator in current_lower for indicator in new_topic_indicators)
+            
+            if is_new_topic or is_topic_switch:
+                # Extract a simple topic summary
+                topic_summary = self._extract_topic_summary(current_message)
+                
+                # Update active topic
+                self.active_topics[session_key] = topic_summary
+                
+                # Update database
+                self._update_topic_state_in_db(user_name, session_id, 'active', topic_summary)
+                
+                logger.info(f"Tracked new topic for {user_name}: {topic_summary}")
+            
+        except Exception as e:
+            logger.error(f"Error tracking new topic: {e}")
+
+    def _extract_topic_summary(self, message):
+        """Extract a simple topic summary from a message"""
+        try:
+            # Simple keyword-based topic extraction
+            message_lower = message.lower()
+            
+            if any(word in message_lower for word in ['appointment', 'meeting', 'schedule', 'calendar']):
+                return "schedule/appointment"
+            elif any(word in message_lower for word in ['weather', 'temperature', 'rain', 'sunny']):
+                return "weather"
+            elif any(word in message_lower for word in ['food', 'eat', 'restaurant', 'cook', 'recipe']):
+                return "food/cooking"
+            elif any(word in message_lower for word in ['work', 'job', 'office', 'meeting']):
+                return "work"
+            elif any(word in message_lower for word in ['travel', 'trip', 'vacation', 'flight']):
+                return "travel"
+            elif any(word in message_lower for word in ['health', 'doctor', 'medical', 'medicine']):
+                return "health"
+            else:
+                # Extract first few words as topic
+                words = message.split()[:4]
+                return " ".join(words).lower()
+                
+        except Exception as e:
+            logger.error(f"Error extracting topic summary: {e}")
+            return "general"
+
     def build_prompt_with_context(self, current_message, user_name=None, session_id=None):
         """Build a prompt with short-term (current session) and long-term (semantic) memory, with intelligent context selection"""
         try:
@@ -2416,9 +3048,10 @@ Reason: [brief explanation]"""
 
             # Detect if this is a schedule-related query
             is_schedule_related = self.is_schedule_query(current_message)
+            is_event_name_query = self.is_event_name_query(current_message) if is_schedule_related else False
             date_context = self.extract_date_context(current_message) if is_schedule_related else None
 
-            logger.debug(f"Query complexity: {complexity}, CoT: {use_chain_of_thought}, Semantic ranking: {use_semantic_ranking}, Schedule query: {is_schedule_related}, Date context: {date_context}")
+            logger.debug(f"Query complexity: {complexity}, CoT: {use_chain_of_thought}, Semantic ranking: {use_semantic_ranking}, Schedule query: {is_schedule_related}, Event name query: {is_event_name_query}, Date context: {date_context}")
             
             # Get bot persona from config
             persona = self.get_config('bot_persona', '')
@@ -2472,6 +3105,24 @@ SCHEDULING CAPABILITIES:
 9. RESPOND TO CURRENT MESSAGE: Focus ONLY on what the user just said. Do NOT bring up unrelated topics from past conversations.
 
 """
+
+            # Add topic state awareness
+            if user_name and session_id:
+                session_key = f"{user_name}_{session_id}"
+                active_topic = self.active_topics.get(session_key)
+                resolved_topics = self.resolved_topics.get(session_key, [])
+                
+                # Check if this is a closure message
+                closure_detected, closure_type = self.detect_conversation_closure(current_message, user_name, session_id)
+                if closure_detected:
+                    full_prompt += "IMPORTANT: The user is expressing gratitude/acknowledgment. The previous topic has been RESOLVED. Respond warmly and briefly, then be ready for a new topic.\n\n"
+                
+                # Show recently resolved topics (don't bring these up unless asked)
+                if resolved_topics:
+                    full_prompt += "RECENTLY RESOLVED TOPICS (don't bring these up unless asked):\n"
+                    for topic_info in resolved_topics[-3:]:  # Last 3 resolved topics
+                        full_prompt += f"- {topic_info['topic']}\n"
+                    full_prompt += "\n"
 
             # Add persona if configured (but subordinate to truthfulness)
             if persona and persona.strip():
@@ -2547,31 +3198,128 @@ SCHEDULING CAPABILITIES:
 
             # Add schedule events to context - ONLY when user asks about schedule
             if is_schedule_related and schedule_events:
-                # Filter events based on date context
-                filtered_events = []
-
-                if date_context == 'today':
-                    today_str = current_datetime.strftime('%Y-%m-%d')
-                    filtered_events = [e for e in schedule_events if str(e['event_date']) == today_str]
-                    time_range = "TODAY"
-                elif date_context == 'tomorrow':
-                    from datetime import timedelta
-                    tomorrow = current_datetime + timedelta(days=1)
-                    tomorrow_str = tomorrow.strftime('%Y-%m-%d')
-                    filtered_events = [e for e in schedule_events if str(e['event_date']) == tomorrow_str]
-                    time_range = "TOMORROW"
-                elif date_context == 'week':
-                    from datetime import timedelta
-                    week_end = current_datetime + timedelta(days=7)
-                    filtered_events = [e for e in schedule_events if current_datetime.date() <= e['event_date'] <= week_end.date()]
-                    time_range = "THIS WEEK"
-                elif date_context in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
-                    filtered_events = [e for e in schedule_events if e['event_date'].strftime('%A').lower() == date_context]
-                    time_range = date_context.upper()
+                # Check if this is an event name query and use search if so
+                if is_event_name_query:
+                    try:
+                        # Use three-tier search for event name queries
+                        from datetime import timedelta
+                        end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
+                        search_results = self.search_schedule_by_title(
+                            user_name=user_name,
+                            search_query=current_message,
+                            start_date=current_datetime.strftime('%Y-%m-%d'),
+                            end_date=end_date,
+                            timeout=300,
+                            max_retries=3
+                        )
+                        filtered_events = search_results
+                        time_range = "SEARCH RESULTS"
+                        logger.info(f"Event name search found {len(filtered_events)} results for '{current_message}'")
+                    except Exception as e:
+                        logger.error(f"Event name search failed: {e}")
+                        # Fallback to regular filtering
+                        filtered_events = schedule_events
+                        time_range = "UPCOMING"
                 else:
-                    # Show all events (default)
-                    filtered_events = schedule_events
+                    # Regular date-based and keyword filtering for non-event-name queries
+                    from datetime import timedelta
+                    text_lower = current_message.lower()
+                    filtered_events = schedule_events  # Default to all events
                     time_range = "UPCOMING"
+
+                    # First: Apply keyword filtering if specific event types are mentioned
+                    keyword_categories = {
+                        'travel': ['travel', 'trip', 'flight', 'vacation', 'journey', 'fly', 'flying', 'depart', 'return', 'arrive', 'airport'],
+                        'appointment': ['appointment', 'doctor', 'dentist', 'checkup', 'medical', 'clinic', 'hospital'],
+                        'meeting': ['meeting', 'call', 'conference', 'zoom', 'presentation'],
+                        'event': ['party', 'celebration', 'birthday', 'shower', 'wedding', 'anniversary'],
+                    }
+
+                    for category, keywords in keyword_categories.items():
+                        if any(kw in text_lower for kw in keywords):
+                            # Filter events that match these keywords
+                            filtered_events = [
+                                e for e in schedule_events
+                                if any(kw in (e['title'] or '').lower() or kw in (e['description'] or '').lower()
+                                      for kw in keywords)
+                            ]
+                            if filtered_events:
+                                time_range = f"{category.upper()}"
+                                logger.info(f"Filtered {len(filtered_events)} events by keyword category: {category}")
+                                break
+
+                    # Second: Apply month filtering if specific month is mentioned
+                    month_filtered = False
+                    
+                    # Relative month filtering
+                    if 'this month' in text_lower:
+                        current_month = current_datetime.month
+                        current_year = current_datetime.year
+                        filtered_events = [
+                            e for e in filtered_events
+                            if e['event_date'].month == current_month and e['event_date'].year == current_year
+                        ]
+                        time_range = "THIS MONTH"
+                        logger.info(f"Filtered {len(filtered_events)} events for this month")
+                        month_filtered = True
+                    elif 'next month' in text_lower:
+                        next_month_date = current_datetime.replace(day=1) + timedelta(days=32)
+                        next_month = next_month_date.month
+                        next_year = next_month_date.year
+                        filtered_events = [
+                            e for e in filtered_events
+                            if e['event_date'].month == next_month and e['event_date'].year == next_year
+                        ]
+                        time_range = "NEXT MONTH"
+                        logger.info(f"Filtered {len(filtered_events)} events for next month")
+                        month_filtered = True
+                    elif 'this quarter' in text_lower:
+                        current_quarter = (current_datetime.month - 1) // 3 + 1
+                        quarter_start_month = (current_quarter - 1) * 3 + 1
+                        quarter_end_month = current_quarter * 3
+                        filtered_events = [
+                            e for e in filtered_events
+                            if quarter_start_month <= e['event_date'].month <= quarter_end_month
+                            and e['event_date'].year == current_datetime.year
+                        ]
+                        time_range = f"Q{current_quarter}"
+                        logger.info(f"Filtered {len(filtered_events)} events for this quarter")
+                        month_filtered = True
+                    
+                    # Specific month filtering
+                    if not month_filtered:
+                        month_names = {
+                            'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+                            'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+                        }
+                        for month_name, month_num in month_names.items():
+                            if month_name in text_lower:
+                                # Filter events in that specific month
+                                filtered_events = [
+                                    e for e in filtered_events
+                                    if e['event_date'].month == month_num
+                                ]
+                                time_range = f"{month_name.upper()}"
+                                logger.info(f"Filtered {len(filtered_events)} events for month: {month_name}")
+                                break
+
+                    # Third: Apply date-based filtering (today, tomorrow, this week)
+                    if date_context == 'today':
+                        today_str = current_datetime.strftime('%Y-%m-%d')
+                        filtered_events = [e for e in filtered_events if str(e['event_date']) == today_str]
+                        time_range = "TODAY"
+                    elif date_context == 'tomorrow':
+                        tomorrow = current_datetime + timedelta(days=1)
+                        tomorrow_str = tomorrow.strftime('%Y-%m-%d')
+                        filtered_events = [e for e in filtered_events if str(e['event_date']) == tomorrow_str]
+                        time_range = "TOMORROW"
+                    elif date_context == 'week':
+                        week_end = current_datetime + timedelta(days=7)
+                        filtered_events = [e for e in filtered_events if current_datetime.date() <= e['event_date'] <= week_end.date()]
+                        time_range = "THIS WEEK"
+                    elif date_context in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                        filtered_events = [e for e in filtered_events if e['event_date'].strftime('%A').lower() == date_context]
+                        time_range = date_context.upper()
 
                 full_prompt += f"📅 {user_name.upper()}'S {time_range} SCHEDULE:\n"
                 if filtered_events:
@@ -2670,7 +3418,23 @@ SCHEDULING CAPABILITIES:
         if response.status_code == 200:
             return io.BytesIO(response.content)
         else:
-            raise requests.RequestException(f"TTS failed: {response.text}")
+            # Parse error details
+            error_details = f"Status {response.status_code}"
+            try:
+                error_json = response.json()
+                if 'error' in error_json:
+                    error_msg = error_json['error']
+                    if error_msg:
+                        error_details += f", Error: {error_msg}"
+                    else:
+                        error_details += ", Error message empty"
+                else:
+                    error_details += f", Response: {response.text[:200]}"
+            except:
+                error_details += f", Response: {response.text[:200]}"
+
+            text_preview = text[:100] + "..." if len(text) > 100 else text
+            raise requests.RequestException(f"TTS ({tts_engine}) failed: {error_details}, Text: '{text_preview}'")
 
     def play_audio(self, audio_data):
         """Play audio to Mumble channel"""

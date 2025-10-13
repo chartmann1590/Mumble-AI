@@ -257,6 +257,10 @@ CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule_events(event_date);
 CREATE INDEX IF NOT EXISTS idx_schedule_active ON schedule_events(active);
 CREATE INDEX IF NOT EXISTS idx_schedule_importance ON schedule_events(importance DESC);
 
+-- Add full-text search indexes for event title search
+CREATE INDEX IF NOT EXISTS idx_schedule_title_gin ON schedule_events USING GIN(to_tsvector('english', title));
+CREATE INDEX IF NOT EXISTS idx_schedule_title_trgm ON schedule_events USING GIN(title gin_trgm_ops);
+
 -- Create update trigger for schedule_events updated_at
 CREATE OR REPLACE FUNCTION update_schedule_events_updated_at()
 RETURNS TRIGGER AS $$
