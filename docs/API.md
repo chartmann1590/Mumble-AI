@@ -4,6 +4,7 @@ Complete API documentation for all Mumble AI Bot services.
 
 ## Table of Contents
 
+- [Landing Page Service API](#landing-page-service-api) (Port 5007)
 - [Web Control Panel API](#web-control-panel-api) (Port 5002)
 - [TTS Voice Generator API](#tts-voice-generator-api) (Port 5003)
 - [Faster Whisper API](#faster-whisper-api) (Port 5000)
@@ -15,6 +16,153 @@ Complete API documentation for all Mumble AI Bot services.
 - [Topic State Tracking](#topic-state-tracking)
 - [SIP Bridge](#sip-bridge) (Port 5060)
 - [Mumble Web Client](#mumble-web-client) (Port 8081)
+
+## Landing Page Service API
+
+Base URL: `http://localhost:5007`
+
+The Landing Page Service provides a comprehensive web interface for accessing the Mumble AI system, including service status monitoring, APK downloads, and changelog display.
+
+### Service Status
+
+#### Get Service Status
+
+**Endpoint:** `GET /api/status`
+
+Returns real-time status of all Mumble AI services.
+
+**Response:**
+```json
+{
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "services": [
+    {
+      "service": "mumble-server",
+      "name": "Mumble Server",
+      "port": 48000,
+      "internalPort": 64738,
+      "host": "mumble-server",
+      "status": "healthy",
+      "responseTime": "15ms",
+      "details": { "message": "TCP connection successful" },
+      "url": "mumble-server:64738",
+      "method": "tcp"
+    }
+  ],
+  "summary": {
+    "total": 10,
+    "healthy": 8,
+    "running": 1,
+    "unhealthy": 1
+  }
+}
+```
+
+### Changelog Data
+
+#### Get Changelog Data
+
+**Endpoint:** `GET /api/changelog`
+
+Returns parsed changelog data from all `CHANGELOG_*.md` files.
+
+**Response:**
+```json
+[
+  {
+    "component": "Topic State And Search Improvements",
+    "date": "January 15, 2025",
+    "content": "<h1>Topic State & Search Improvements</h1>...",
+    "filename": "CHANGELOG_TOPIC_STATE_AND_SEARCH_IMPROVEMENTS.md"
+  }
+]
+```
+
+### APK Files
+
+#### Get APK Files
+
+**Endpoint:** `GET /api/apk`
+
+Returns information about available APK files.
+
+**Response:**
+```json
+[
+  {
+    "filename": "app-release.apk",
+    "size": "25.4 MB",
+    "sizeBytes": 26624000,
+    "modified": "2025-01-15T09:15:00.000Z",
+    "path": "/app/apk/app-release.apk"
+  }
+]
+```
+
+#### Generate QR Code
+
+**Endpoint:** `GET /api/qr/:filename`
+
+Generates a QR code for APK download.
+
+**Parameters:**
+- `filename` (string): APK filename
+
+**Response:**
+```json
+{
+  "filename": "app-release.apk",
+  "downloadUrl": "http://192.168.1.100:5007/download/apk/app-release.apk",
+  "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+  "deviceIP": "192.168.1.100"
+}
+```
+
+#### Download APK
+
+**Endpoint:** `GET /download/apk/:filename`
+
+Serves APK files for download.
+
+**Parameters:**
+- `filename` (string): APK filename
+
+**Response:** Binary APK file with appropriate headers.
+
+### Device Information
+
+#### Get Device IP
+
+**Endpoint:** `GET /api/device-ip`
+
+Returns the device IP address for download URLs.
+
+**Response:**
+```json
+{
+  "deviceIP": "192.168.1.100",
+  "port": 5007,
+  "downloadBaseUrl": "http://192.168.1.100:5007/download/apk/"
+}
+```
+
+### Health Check
+
+#### Service Health
+
+**Endpoint:** `GET /health`
+
+Returns service health status.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "uptime": 3600.5,
+  "version": "1.0.0"
+}
+```
 
 ## Web Control Panel API
 

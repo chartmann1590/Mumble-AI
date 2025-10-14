@@ -35,6 +35,7 @@ A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers wit
 - **Email Integration**: Two-way email communication with AI-powered responses and attachment processing
 - **Web Control Panel**: Comprehensive management interface for all configuration
 - **TTS Voice Generator**: Beautiful standalone web interface for voice generation and cloning
+- **Android App** (🚧 **In Development**): Flutter-based mobile app for remote management and AI chat
 
 ### 📧 Email System
 - **Two-Way Email**: Send emails to the bot and receive intelligent AI responses
@@ -69,6 +70,41 @@ A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers wit
 - **Audio Player**: Built-in player with duration display
 - **Download Support**: Generate and download high-quality WAV files
 - **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
+
+### 📱 Android Mobile App (🚧 In Development)
+
+A Flutter-based Android application that provides mobile access to the Mumble AI system:
+
+**⚠️ Development Status**: This app is currently in active development and may not be fully functional yet. Features are being implemented and tested.
+
+**Planned Features**:
+- **Server Connection Management**: Connect to your Mumble AI server remotely
+- **AI Chat Interface**: Direct text chat with the AI assistant
+- **Dashboard**: View statistics and upcoming events
+- **Configuration Management**: Configure Ollama models, TTS voices, and settings
+- **Memory Management**: View and manage persistent memories
+- **Schedule Management**: Add, edit, and view calendar events
+- **Email Settings**: Configure email integration
+- **Voice Configuration**: Select and preview TTS voices
+- **Persona Management**: Edit and enhance bot personality
+
+**Current Status**:
+- ✅ Core app structure and navigation
+- ✅ Server connection and API integration
+- ✅ Dashboard with statistics
+- ✅ AI chat interface
+- ✅ Configuration screens
+- ✅ Memory and schedule management
+- 🚧 Testing and bug fixes in progress
+- 🚧 Final polish and optimization
+
+**Installation** (When Ready):
+1. Download the APK from the `mumble_ai_flutter/build/app/outputs/flutter-apk/` directory
+2. Install on Android device (API level 21+)
+3. Configure server connection
+4. Start managing your Mumble AI system remotely
+
+**Note**: This is an experimental feature. The web control panel remains the primary and most stable interface for system management.
 
 ### 🔧 Technical Features
 - **Docker Compose**: Full stack deployment with one command
@@ -167,9 +203,23 @@ On first run, this will:
 - Initialize PostgreSQL database
 - Build and start the bot
 
-### 4. Access the Control Panel
+### 4. Access the Landing Page
 
 Open your browser and navigate to:
+```
+http://localhost:5007
+```
+
+This is the main landing page where you can:
+- View real-time service status
+- Access all web interfaces
+- Download Android APK files
+- View project changelog
+- Get quick links to documentation
+
+### 5. Access the Control Panel
+
+From the landing page or directly at:
 ```
 http://localhost:5002
 ```
@@ -181,7 +231,7 @@ From here you can:
 - View conversation history
 - Monitor statistics
 
-### 5. Access the System
+### 6. Access the System
 
 #### Option A: Traditional Mumble Client
 1. Open your Mumble client
@@ -228,6 +278,7 @@ From here you can:
 | **Silero TTS** | 5004 | Alternative text-to-speech API (20+ voices) |
 | **Chatterbox TTS** | 5005 | Voice cloning TTS API with XTTS-v2 |
 | **Email Summary Service** | 5006 | Email processing, summaries, and IMAP/SMTP |
+| **Landing Page** | 5007 | Main project landing page with service status |
 | **PostgreSQL** | 5432 | Database (internal) with persistent storage |
 | **AI Bot** | - | Mumble client with memory and scheduling |
 | **SIP Bridge** | 5060 | SIP/RTP to Mumble bridge with welcome messages |
@@ -604,6 +655,7 @@ Ensure these ports are available:
 - **5004** - Silero TTS
 - **5005** - Chatterbox TTS
 - **5006** - Email Summary Service
+- **5007** - Landing Page
 - **8081** - Mumble Web (HTTPS)
 - **5060** - SIP Bridge
 - **10000-10010** - RTP (SIP Bridge)
@@ -687,11 +739,23 @@ Mumble-AI/
 │   ├── app.py
 │   ├── requirements.txt
 │   └── Dockerfile
+├── landing-page/               # Main project landing page
+│   ├── app.js
+│   ├── package.json
+│   ├── Dockerfile
+│   ├── views/
+│   │   └── index.html
+│   └── public/
 ├── models/                     # AI model storage
 │   ├── whisper/                # Whisper models
 │   ├── piper/                  # Piper TTS models
 │   ├── silero/                 # Silero TTS models
 │   └── chatterbox/             # Chatterbox TTS models
+├── mumble_ai_flutter/          # Android mobile app (🚧 In Development)
+│   ├── lib/                    # Flutter source code
+│   ├── android/                # Android configuration
+│   ├── build/                  # Build outputs
+│   └── README.md               # App documentation
 └── docs/                       # Documentation
     ├── ARCHITECTURE.md
     ├── API.md
@@ -726,6 +790,13 @@ deploy:
 Download additional voices from https://github.com/rhasspy/piper and update the download URLs in `web-control-panel/download_voices.py`.
 
 ## Recent Updates
+
+### v1.3.1 - Android Mobile App Development (January 15, 2025)
+- **Android App**: Started development of Flutter-based Android mobile app
+- **Mobile Interface**: Complete mobile interface for remote Mumble AI management
+- **AI Chat**: Direct text chat with AI assistant from mobile device
+- **Remote Management**: Configure and monitor system remotely via mobile app
+- **Status**: In active development - features being implemented and tested
 
 ### v1.3.0 - Topic State Tracking & Advanced Search System (January 15, 2025)
 - **Topic State Tracking**: New conversation topic management with active, resolved, and switched states

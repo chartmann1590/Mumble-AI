@@ -4,7 +4,7 @@ System design and component interaction documentation.
 
 ## Overview
 
-Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 13 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, SIP phone integration, and email communication.
+Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 14 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, SIP phone integration, email communication, and mobile app access.
 
 ## Component Diagram
 
@@ -15,6 +15,10 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │  │Mumble Client │  │ Web Clients  │  │ SIP Phones   │  │ Web Browser     │ │
 │  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)  │  │(Control Panel)  │ │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
+│  │Android App   │  │ Landing Page │  │ Email Client │  │ Mobile Browser  │ │
+│  │(Flutter)     │  │(Port 5007)   │  │(IMAP/SMTP)   │  │(All Services)   │ │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
 └─────────┼──────────────────┼──────────────────┼───────────────────┼─────────┘
           │                  │                  │                   │
 ┌─────────▼──────────────────▼──────────────────▼───────────────────▼─────────┐
@@ -24,10 +28,11 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │  │   (Port 48000)   │  │(Port 5060)   │  │   Panel      │  │  Client     │  │
 │  └─────────┬────────┘  └──────┬───────┘  │(Port 5002)   │  │(Port 8081)  │  │
 │            │                  │          └──────────────┘  └─────────────┘  │
-│       ┌────▼──────┐           │                                            │
-│       │  AI Bot   │           │                                            │
-│       └─┬───┬───┬─┘           │                                            │
-└─────────┼───┼───┼─────────────┼────────────────────────────────────────────┘
+│       ┌────▼──────┐           │          ┌──────────────┐  ┌─────────────┐  │
+│       │  AI Bot   │           │          │ Landing Page │  │ TTS Voice   │  │
+│       └─┬───┬───┬─┘           │          │(Port 5007)   │  │ Generator   │  │
+│         │   │   │             │          └──────────────┘  │(Port 5003)  │  │
+└─────────┼───┼───┼─────────────┼─────────────────────────────└─────────────┘  │
           │   │   │             │
 ┌─────────▼───▼───▼─────────────▼────────────────────────────────────────────┐
 │                            Service Layer                                    │

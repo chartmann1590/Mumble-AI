@@ -169,3 +169,45 @@ mumble-web-ssl/*.pem
 playwright-report/
 test-results/
 tts-web-interface/tests/
+
+# Flutter/Dart
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/pubspec.lock
+
+# Generated code
+**/*.g.dart
+**/*.freezed.dart
+**/generated_plugin_registrant.dart
+
+# Android-specific
+**/android/local.properties
+**/android/.gradle/
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/.externalNativeBuild/
+**/android/key.properties
+
+# iOS-specific
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/.generated/
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+# IDE-specific (Flutter-related)
+**/*.iml
+**/android/app/*.iml
+
+# Web-specific
+**/web/flutter_service_worker.js
+**/web/.dart_tool/

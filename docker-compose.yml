@@ -344,6 +344,30 @@ services:
     networks:
       - mumble-ai-network
 
+  landing-page:
+    build:
+      context: ./landing-page
+      dockerfile: Dockerfile
+    container_name: landing-page
+    ports:
+      - "5007:5007"
+    environment:
+      - NODE_ENV=production
+      - PORT=5007
+      - HOST_IP=${HOST_IP:-10.0.0.74}
+    volumes:
+      - ./mumble_ai_flutter/build/app/outputs/flutter-apk:/app/apk:ro
+      - ./docs:/app/docs:ro
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5007/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
 networks:
   mumble-ai-network:
     driver: bridge
