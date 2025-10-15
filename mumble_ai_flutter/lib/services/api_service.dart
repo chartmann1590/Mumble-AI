@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'logging_service.dart';
 
 class ApiService {
   static ApiService? _instance;
@@ -20,6 +21,23 @@ class ApiService {
         error: true,
       ));
     }
+    
+    // Add response interceptor to transform host.docker.internal URLs
+    // Temporarily disabled to debug API issues
+    // _dio.interceptors.add(InterceptorsWrapper(
+    //   onResponse: (response, handler) {
+    //     try {
+    //       // Transform any host.docker.internal URLs in the response
+    //       response.data = _transformHostDockerInternal(response.data);
+    //     } catch (e) {
+    //       // If transformation fails, continue with original data
+    //       if (kDebugMode) {
+    //         print('Error in response interceptor: $e');
+    //       }
+    //     }
+    //     handler.next(response);
+    //   },
+    // ));
   }
 
   static ApiService getInstance() {
@@ -34,6 +52,51 @@ class ApiService {
 
   String? get baseUrl => _baseUrl;
 
+  // Helper method to safely cast response data to Map<String, dynamic>
+  Map<String, dynamic>? safeCastResponseData(dynamic data) {
+    if (data == null) return null;
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) {
+      final Map<String, dynamic> result = {};
+      data.forEach((key, value) {
+        result[key.toString()] = value;
+      });
+      return result;
+    }
+    return null;
+  }
+
+  // Helper method to safely cast list data
+  List<dynamic>? safeCastListData(dynamic data) {
+    if (data == null) return null;
+    if (data is List<dynamic>) return data;
+    if (data is List) {
+      return List<dynamic>.from(data);
+    }
+    return null;
+  }
+
+  // Helper method to safely cast any response data
+  dynamic safeCastAnyData(dynamic data) {
+    if (data == null) return null;
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) {
+      final Map<String, dynamic> result = {};
+      data.forEach((key, value) {
+        result[key.toString()] = safeCastAnyData(value);
+      });
+      return result;
+    }
+    if (data is List<dynamic>) return data;
+    if (data is List) {
+      return data.map((item) => safeCastAnyData(item)).toList();
+    }
+    
+    // Don't log unexpected data types to avoid spam
+    
+    return data;
+  }
+
   // Test connection to server
   Future<bool> testConnection() async {
     try {
@@ -46,18 +109,59 @@ class ApiService {
 
   // Generic GET request
   Future<Response> get(String path, {Map<String, dynamic>? queryParameters}) async {
+    final loggingService = LoggingService.getInstance();
+    final startTime = DateTime.now();
+    
     try {
-      return await _dio.get(path, queryParameters: queryParameters);
+      loggingService.logApiCall('GET', path, requestData: queryParameters);
+      final response = await _dio.get(path, queryParameters: queryParameters);
+      
+      // Log the actual response type and data for debugging
+      loggingService.debug('Response data type: ${response.data.runtimeType}', screen: 'ApiService');
+      final dataStr = response.data.toString();
+      loggingService.debug('Response data: ${dataStr.substring(0, dataStr.length > 200 ? 200 : dataStr.length)}', screen: 'ApiService');
+      
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logApiCall('GET', path, 
+          requestData: queryParameters, 
+          responseData: response.data, 
+          statusCode: response.statusCode);
+      loggingService.logPerformance('GET $path', duration);
+      
+      // Return the response as-is, let each screen handle the data type
+      return response;
     } on DioError catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('GET $path (ERROR)', duration);
       throw _handleError(e);
+    } catch (e, stackTrace) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('GET $path (EXCEPTION)', duration);
+      loggingService.logException(e, stackTrace, screen: 'ApiService');
+      rethrow;
     }
   }
 
   // Generic POST request
   Future<Response> post(String path, {dynamic data, Map<String, dynamic>? queryParameters}) async {
+    final loggingService = LoggingService.getInstance();
+    final startTime = DateTime.now();
+    
     try {
-      return await _dio.post(path, data: data, queryParameters: queryParameters);
+      loggingService.logApiCall('POST', path, requestData: data);
+      final response = await _dio.post(path, data: data, queryParameters: queryParameters);
+      
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logApiCall('POST', path, 
+          requestData: data, 
+          responseData: response.data, 
+          statusCode: response.statusCode);
+      loggingService.logPerformance('POST $path', duration);
+      
+      return response;
     } on DioError catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('POST $path (ERROR)', duration);
       throw _handleError(e);
     }
   }
@@ -91,23 +195,83 @@ class ApiService {
 
   // Handle Dio errors and convert to user-friendly messages
   Exception _handleError(DioError error) {
+    final loggingService = LoggingService.getInstance();
+    
+    String userMessage;
     if (error.type == DioErrorType.connectTimeout ||
         error.type == DioErrorType.sendTimeout ||
         error.type == DioErrorType.receiveTimeout) {
-      return Exception('Connection timeout. Please check your network connection.');
+      userMessage = 'Connection timeout. Please check your network connection.';
     } else if (error.type == DioErrorType.response) {
       final statusCode = error.response?.statusCode;
       final message = error.response?.data?['error'] ?? 'Server error';
-      return Exception('Server error ($statusCode): $message');
+      userMessage = 'Server error ($statusCode): $message';
     } else if (error.type == DioErrorType.cancel) {
-      return Exception('Request was cancelled');
+      userMessage = 'Request was cancelled';
     } else if (error.type == DioErrorType.other) {
       if (error.message.contains('SocketException')) {
-        return Exception('Unable to connect to server. Please check the server URL and your network connection.');
+        userMessage = 'Unable to connect to server. Please check the server URL and your network connection.';
+      } else {
+        userMessage = 'Network error: ${error.message}';
       }
-      return Exception('Network error: ${error.message}');
     } else {
-      return Exception('An unexpected error occurred: ${error.message}');
+      userMessage = 'An unexpected error occurred: ${error.message}';
     }
+    
+    // Enhanced error logging with more details
+    loggingService.error('API Error: $userMessage', 
+                        screen: 'ApiService',
+                        data: {
+                          'errorType': error.type.toString(),
+                          'statusCode': error.response?.statusCode,
+                          'requestPath': error.requestOptions.path,
+                          'baseUrl': _baseUrl,
+                          'requestMethod': error.requestOptions.method,
+                          'requestData': error.requestOptions.data,
+                          'responseData': error.response?.data,
+                          'errorMessage': error.message,
+                          'stackTrace': error.stackTrace?.toString(),
+                        });
+    
+    return Exception(userMessage);
+  }
+
+  // Helper method to recursively transform host.docker.internal URLs and fix data types
+  dynamic _transformHostDockerInternal(dynamic data) {
+    if (data == null) return data;
+    
+    // If no base URL is set, we can't transform, so return data as-is
+    if (_baseUrl == null) return data;
+    
+    try {
+      // Extract server IP from base URL (e.g., "192.168.1.100" from "http://192.168.1.100:5002")
+      final serverUri = Uri.parse(_baseUrl!);
+      final serverHost = serverUri.host;
+      
+      if (data is String) {
+        // Only transform if the string contains host.docker.internal
+        if (data.contains('host.docker.internal')) {
+          return data.replaceAll('host.docker.internal', serverHost);
+        }
+        return data;
+      } else if (data is Map) {
+        // Convert Map<dynamic, dynamic> to Map<String, dynamic>
+        final Map<String, dynamic> result = {};
+        data.forEach((key, value) {
+          final stringKey = key.toString();
+          result[stringKey] = _transformHostDockerInternal(value);
+        });
+        return result;
+      } else if (data is List) {
+        return data.map((item) => _transformHostDockerInternal(item)).toList();
+      }
+    } catch (e) {
+      // If there's any error parsing the URL, return data as-is
+      if (kDebugMode) {
+        print('Error transforming host.docker.internal URLs: $e');
+      }
+    }
+    
+    return data;
   }
 }

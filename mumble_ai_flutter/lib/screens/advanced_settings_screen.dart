@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
@@ -29,6 +30,11 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('AdvancedSettingsScreen', 'initState');
+    
     _loadAdvancedSettings();
   }
 
@@ -47,6 +53,8 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final response = await apiService.get(AppConstants.advancedSettingsEndpoint);
       final data = response.data;
 
@@ -59,7 +67,12 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
         _enableParallelProcessing = data['enable_parallel_processing'] ?? false;
         _isLoading = false;
       });
-    } catch (e) {
+      
+      loggingService.info('Advanced settings loaded successfully', screen: 'AdvancedSettingsScreen');
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'AdvancedSettingsScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load advanced settings: ${e.toString()}';
@@ -76,6 +89,15 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Save Advanced Settings', screen: 'AdvancedSettingsScreen', data: {
+        'chainOfThought': _useChainOfThought,
+        'semanticRanking': _useSemanticMemoryRanking,
+        'responseValidation': _useResponseValidation,
+        'parallelProcessing': _enableParallelProcessing,
+      });
+      
       await apiService.post(AppConstants.advancedSettingsEndpoint, data: {
         'short_term_memory_limit': int.parse(_shortTermMemoryController.text),
         'long_term_memory_limit': int.parse(_longTermMemoryController.text),
@@ -85,6 +107,8 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
         'enable_parallel_processing': _enableParallelProcessing,
       });
 
+      loggingService.info('Advanced settings saved successfully', screen: 'AdvancedSettingsScreen');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -93,7 +117,10 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'AdvancedSettingsScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

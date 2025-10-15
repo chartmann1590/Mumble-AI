@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
@@ -30,6 +31,11 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('OllamaConfigScreen', 'initState');
+    
     _loadConfiguration();
   }
 
@@ -72,15 +78,28 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.ollamaConfigEndpoint);
       
-      setState(() {
-        _ollamaUrlController.text = response.data['ollama_url'] ?? '';
-        _selectedModel = response.data['model'] ?? '';
-      });
+      if (response.data != null) {
+        final data = apiService.safeCastResponseData(response.data);
+        if (data != null) {
+          setState(() {
+            _ollamaUrlController.text = data['url'] ?? '';
+            _selectedModel = data['model'] ?? '';
+          });
+        } else {
+          throw Exception('Invalid data format received from server');
+        }
+      } else {
+        throw Exception('No data received from server');
+      }
     } catch (e) {
-      setState(() {
-        _ollamaUrlController.text = 'http://localhost:11434';
-        _selectedModel = null;
-      });
+      if (mounted) {
+        setState(() {
+          _ollamaUrlController.text = 'http://localhost:11434';
+          _selectedModel = null;
+        });
+      }
+      // Log error for debugging
+      print('Error loading Ollama config: $e');
     }
   }
 
@@ -89,13 +108,25 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.visionConfigEndpoint);
       
-      setState(() {
-        _selectedVisionModel = response.data['model'] ?? '';
-      });
+      if (response.data != null) {
+        final data = apiService.safeCastResponseData(response.data);
+        if (data != null) {
+          setState(() {
+            _selectedVisionModel = data['vision_model'] ?? '';
+          });
+        } else {
+          throw Exception('Invalid data format received from server');
+        }
+      } else {
+        throw Exception('No data received from server');
+      }
     } catch (e) {
-      setState(() {
-        _selectedVisionModel = null;
-      });
+      if (mounted) {
+        setState(() {
+          _selectedVisionModel = null;
+        });
+      }
+      print('Error loading vision config: $e');
     }
   }
 
@@ -104,13 +135,25 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.memoryModelConfigEndpoint);
       
-      setState(() {
-        _selectedMemoryModel = response.data['model'] ?? '';
-      });
+      if (response.data != null) {
+        final data = apiService.safeCastResponseData(response.data);
+        if (data != null) {
+          setState(() {
+            _selectedMemoryModel = data['memory_extraction_model'] ?? '';
+          });
+        } else {
+          throw Exception('Invalid data format received from server');
+        }
+      } else {
+        throw Exception('No data received from server');
+      }
     } catch (e) {
-      setState(() {
-        _selectedMemoryModel = null;
-      });
+      if (mounted) {
+        setState(() {
+          _selectedMemoryModel = null;
+        });
+      }
+      print('Error loading memory config: $e');
     }
   }
 
@@ -119,9 +162,17 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.ollamaModelsEndpoint);
       
-      setState(() {
-        _availableModels = List<String>.from(response.data);
-      });
+      // Extract 'models' key from response
+      final data = apiService.safeCastResponseData(response.data);
+      if (data != null && data.containsKey('models')) {
+        setState(() {
+          _availableModels = List<String>.from(data['models']);
+        });
+      } else {
+        setState(() {
+          _availableModels = [];
+        });
+      }
     } catch (e) {
       setState(() {
         _availableModels = [];
@@ -134,9 +185,17 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.visionModelsEndpoint);
       
-      setState(() {
-        _visionModels = List<String>.from(response.data);
-      });
+      // Extract 'models' key from response
+      final data = apiService.safeCastResponseData(response.data);
+      if (data != null && data.containsKey('models')) {
+        setState(() {
+          _visionModels = List<String>.from(data['models']);
+        });
+      } else {
+        setState(() {
+          _visionModels = [];
+        });
+      }
     } catch (e) {
       setState(() {
         _visionModels = [];
@@ -181,6 +240,9 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
 
   Future<void> _saveOllamaConfig() async {
     if (_ollamaUrlController.text.trim().isEmpty) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.warning('Attempted to save Ollama config with empty URL', screen: 'OllamaConfigScreen');
+      
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please enter Ollama URL'),
@@ -190,6 +252,14 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
       return;
     }
 
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+    
+    loggingService.logUserAction('Save Ollama Config', screen: 'OllamaConfigScreen', data: {
+      'url': _ollamaUrlController.text.trim(),
+      'model': _selectedModel,
+    });
+
     setState(() {
       _isSaving = true;
     });
@@ -197,9 +267,13 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       await apiService.post(AppConstants.ollamaConfigEndpoint, data: {
-        'ollama_url': _ollamaUrlController.text.trim(),
+        'url': _ollamaUrlController.text.trim(),
         'model': _selectedModel,
       });
+
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Save Ollama Config', duration, screen: 'OllamaConfigScreen');
+      loggingService.info('Ollama configuration saved successfully', screen: 'OllamaConfigScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -210,6 +284,10 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
         );
       }
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Save Ollama Config (ERROR)', duration, screen: 'OllamaConfigScreen');
+      loggingService.logException(e, null, screen: 'OllamaConfigScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -233,7 +311,7 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       await apiService.post(AppConstants.visionConfigEndpoint, data: {
-        'model': _selectedVisionModel,
+        'vision_model': _selectedVisionModel,
       });
 
       if (mounted) {
@@ -268,7 +346,7 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       await apiService.post(AppConstants.memoryModelConfigEndpoint, data: {
-        'model': _selectedMemoryModel,
+        'memory_extraction_model': _selectedMemoryModel,
       });
 
       if (mounted) {
@@ -313,7 +391,7 @@ class _OllamaConfigScreenState extends State<OllamaConfigScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       await apiService.post(AppConstants.ollamaConfigEndpoint, data: {
-        'ollama_url': _ollamaUrlController.text.trim(),
+        'url': _ollamaUrlController.text.trim(),
         'model': _selectedModel,
       });
 

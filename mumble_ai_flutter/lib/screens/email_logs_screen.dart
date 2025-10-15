@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../models/email_log.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
@@ -26,6 +27,11 @@ class _EmailLogsScreenState extends State<EmailLogsScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('EmailLogsScreen', 'initState');
+    
     _loadEmailLogs();
   }
 
@@ -45,6 +51,8 @@ class _EmailLogsScreenState extends State<EmailLogsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final queryParams = <String, dynamic>{
         'page': _currentPage,
         'limit': 50,
@@ -66,7 +74,7 @@ class _EmailLogsScreenState extends State<EmailLogsScreen> {
       );
 
       final newLogs = (response.data['logs'] as List)
-          .map((json) => EmailLog.fromJson(json))
+          .map((json) => EmailLog.fromJson(Map<String, dynamic>.from(json)))
           .toList();
 
       setState(() {
@@ -78,7 +86,16 @@ class _EmailLogsScreenState extends State<EmailLogsScreen> {
         _hasMore = newLogs.length == 50;
         _isLoading = false;
       });
-    } catch (e) {
+      
+      loggingService.info('Email logs loaded successfully', screen: 'EmailLogsScreen', data: {
+        'count': newLogs.length,
+        'page': _currentPage,
+        'filters': queryParams,
+      });
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'EmailLogsScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load email logs: ${e.toString()}';
@@ -99,7 +116,17 @@ class _EmailLogsScreenState extends State<EmailLogsScreen> {
   Future<void> _retryEmail(int logId) async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Retry Email', screen: 'EmailLogsScreen', data: {
+        'logId': logId,
+      });
+      
       await apiService.post('${AppConstants.retryEmailEndpoint}/$logId', data: {});
+
+      loggingService.info('Email retry initiated successfully', screen: 'EmailLogsScreen', data: {
+        'logId': logId,
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -112,7 +139,10 @@ class _EmailLogsScreenState extends State<EmailLogsScreen> {
 
       // Refresh the logs to show updated status
       _loadEmailLogs(refresh: true);
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'EmailLogsScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

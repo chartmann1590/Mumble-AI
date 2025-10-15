@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class StorageService {
   static const String _serverUrlKey = 'server_url';
   static const String _rememberServerKey = 'remember_server';
+  static const String _selectedUserKey = 'selected_user';
 
   static StorageService? _instance;
   static SharedPreferences? _prefs;
@@ -35,6 +36,19 @@ class StorageService {
 
   Future<bool> setRememberServer(bool remember) async {
     return await _prefs?.setBool(_rememberServerKey, remember) ?? false;
+  }
+
+  // Selected user management
+  Future<String?> getSelectedUser() async {
+    return _prefs?.getString(_selectedUserKey);
+  }
+
+  Future<bool> setSelectedUser(String user) async {
+    return await _prefs?.setString(_selectedUserKey, user) ?? false;
+  }
+
+  Future<bool> removeSelectedUser() async {
+    return await _prefs?.remove(_selectedUserKey) ?? false;
   }
 
   // Clear all data

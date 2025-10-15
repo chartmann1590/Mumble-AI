@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../models/conversation.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
@@ -22,6 +23,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('ConversationsScreen', 'initState');
+    
     _loadConversations();
   }
 
@@ -33,20 +39,30 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final response = await apiService.get(
         AppConstants.conversationsEndpoint,
         queryParameters: {'limit': _limit},
       );
 
       final conversations = (response.data['conversations'] as List)
-          .map((json) => Conversation.fromJson(json))
+          .map((json) => Conversation.fromJson(Map<String, dynamic>.from(json)))
           .toList();
 
       setState(() {
         _conversations = conversations;
         _isLoading = false;
       });
-    } catch (e) {
+      
+      loggingService.info('Conversations loaded successfully', screen: 'ConversationsScreen', data: {
+        'count': conversations.length,
+        'limit': _limit,
+      });
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'ConversationsScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load conversations: ${e.toString()}';
@@ -79,11 +95,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (confirmed == true) {
       try {
         final apiService = Provider.of<ApiService>(context, listen: false);
+        final loggingService = Provider.of<LoggingService>(context, listen: false);
+        
+        loggingService.logUserAction('Reset Conversations', screen: 'ConversationsScreen');
+        
         await apiService.post(AppConstants.conversationsEndpoint + '/reset');
         
         setState(() {
           _conversations.clear();
         });
+
+        loggingService.info('Conversations reset successfully', screen: 'ConversationsScreen');
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -93,7 +115,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             ),
           );
         }
-      } catch (e) {
+      } catch (e, stackTrace) {
+        final loggingService = Provider.of<LoggingService>(context, listen: false);
+        loggingService.logException(e, stackTrace, screen: 'ConversationsScreen');
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

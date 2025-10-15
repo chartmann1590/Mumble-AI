@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/storage_service.dart';
+import '../services/logging_service.dart';
 import '../models/memory.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
@@ -24,6 +26,11 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('MemoriesScreen', 'initState');
+    
     _loadData();
   }
 
@@ -43,7 +50,10 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
       setState(() {
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'MemoriesScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load data: ${e.toString()}';
@@ -54,11 +64,17 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
   Future<void> _loadMemories() async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final storageService = Provider.of<StorageService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final queryParams = <String, dynamic>{};
       
-      if (_selectedUser != null) {
-        queryParams['user'] = _selectedUser;
+      // Always include the selected user from storage
+      final currentUser = await storageService.getSelectedUser();
+      if (currentUser != null) {
+        queryParams['user'] = currentUser;
       }
+      
       if (_selectedCategory != null) {
         queryParams['category'] = _selectedCategory;
       }
@@ -75,7 +91,15 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
       setState(() {
         _memories = memories;
       });
-    } catch (e) {
+      
+      loggingService.info('Memories loaded successfully', screen: 'MemoriesScreen', data: {
+        'count': memories.length,
+        'user': currentUser,
+        'category': _selectedCategory,
+      });
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'MemoriesScreen');
       throw Exception('Failed to load memories: $e');
     }
   }
@@ -86,9 +110,12 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
       final response = await apiService.get(AppConstants.usersEndpoint);
       
       setState(() {
-        _users = List<String>.from(response.data);
+        _users = (response.data as List).map((item) => item.toString()).toList();
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'MemoriesScreen');
+      
       // Don't throw error for users, just log it
       setState(() {
         _users = [];
@@ -119,10 +146,20 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
     if (confirmed == true) {
       try {
         final apiService = Provider.of<ApiService>(context, listen: false);
+        final loggingService = Provider.of<LoggingService>(context, listen: false);
+        
+        loggingService.logUserAction('Delete Memory', screen: 'MemoriesScreen', data: {
+          'memoryId': memoryId,
+        });
+        
         await apiService.delete('${AppConstants.memoriesEndpoint}/$memoryId');
         
         setState(() {
           _memories.removeWhere((memory) => memory.id == memoryId);
+        });
+
+        loggingService.info('Memory deleted successfully', screen: 'MemoriesScreen', data: {
+          'memoryId': memoryId,
         });
 
         if (mounted) {
@@ -133,7 +170,10 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
             ),
           );
         }
-      } catch (e) {
+      } catch (e, stackTrace) {
+        final loggingService = Provider.of<LoggingService>(context, listen: false);
+        loggingService.logException(e, stackTrace, screen: 'MemoriesScreen');
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -526,6 +566,14 @@ class _AddMemoryDialogState extends State<_AddMemoryDialog> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Add Memory', screen: 'MemoriesScreen', data: {
+        'user': _userController.text.trim(),
+        'category': _selectedCategory,
+        'importance': _importance,
+      });
+      
       await apiService.post(AppConstants.memoriesEndpoint, data: {
         'user_name': _userController.text.trim(),
         'category': _selectedCategory,
@@ -533,6 +581,8 @@ class _AddMemoryDialogState extends State<_AddMemoryDialog> {
         'importance': _importance,
         'tags': [],
       });
+
+      loggingService.info('Memory added successfully', screen: 'MemoriesScreen');
 
       widget.onMemoryAdded();
       Navigator.pop(context);
@@ -545,7 +595,10 @@ class _AddMemoryDialogState extends State<_AddMemoryDialog> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'MemoriesScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -695,12 +748,25 @@ class _EditMemoryDialogState extends State<_EditMemoryDialog> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Update Memory', screen: 'MemoriesScreen', data: {
+        'memoryId': widget.memory.id,
+        'user': _userController.text.trim(),
+        'category': _selectedCategory,
+        'importance': _importance,
+      });
+      
       await apiService.put('${AppConstants.memoriesEndpoint}/${widget.memory.id}', data: {
         'user_name': _userController.text.trim(),
         'category': _selectedCategory,
         'content': _contentController.text.trim(),
         'importance': _importance,
         'tags': widget.memory.tags,
+      });
+
+      loggingService.info('Memory updated successfully', screen: 'MemoriesScreen', data: {
+        'memoryId': widget.memory.id,
       });
 
       widget.onMemoryUpdated();
@@ -714,7 +780,10 @@ class _EditMemoryDialogState extends State<_EditMemoryDialog> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'MemoriesScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

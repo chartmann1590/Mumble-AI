@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../services/audio_service.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
@@ -27,10 +28,20 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('VoiceConfigScreen', 'initState');
+    
     _loadData();
   }
 
   Future<void> _loadData() async {
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+    
+    loggingService.logUserAction('Load Voice Configuration', screen: 'VoiceConfigScreen');
+    
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -45,10 +56,18 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
         _loadCurrentVoices(),
       ]);
 
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Load Voice Configuration', duration, screen: 'VoiceConfigScreen');
+      loggingService.info('Voice configuration loaded successfully', screen: 'VoiceConfigScreen');
+
       setState(() {
         _isLoading = false;
       });
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Load Voice Configuration (ERROR)', duration, screen: 'VoiceConfigScreen');
+      loggingService.logException(e, null, screen: 'VoiceConfigScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load voice configuration: ${e.toString()}';
@@ -76,7 +95,7 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.piperVoicesEndpoint);
       setState(() {
-        _piperVoices = List<Map<String, dynamic>>.from(response.data);
+        _piperVoices = List<Map<String, dynamic>>.from(response.data['voices']);
       });
     } catch (e) {
       setState(() {
@@ -90,7 +109,7 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.sileroVoicesEndpoint);
       setState(() {
-        _sileroVoices = List<Map<String, dynamic>>.from(response.data);
+        _sileroVoices = List<Map<String, dynamic>>.from(response.data['voices']);
       });
     } catch (e) {
       setState(() {
@@ -104,7 +123,7 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.chatterboxVoicesEndpoint);
       setState(() {
-        _chatterboxVoices = List<Map<String, dynamic>>.from(response.data);
+        _chatterboxVoices = List<Map<String, dynamic>>.from(response.data['voices']);
       });
     } catch (e) {
       setState(() {
@@ -130,9 +149,12 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.piperCurrentEndpoint);
-      setState(() {
-        _currentPiperVoice = response.data['voice'] ?? response.data['name'];
-      });
+      final data = apiService.safeCastResponseData(response.data);
+      if (data != null) {
+        setState(() {
+          _currentPiperVoice = data['voice'] ?? data['name'];
+        });
+      }
     } catch (e) {
       setState(() {
         _currentPiperVoice = null;
@@ -171,10 +193,20 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
   Future<void> _setTtsEngine(String engine) async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Set TTS Engine', screen: 'VoiceConfigScreen', data: {
+        'engine': engine,
+      });
+      
       await apiService.post(AppConstants.ttsEngineEndpoint, data: {'engine': engine});
       
       setState(() {
         _selectedEngine = engine;
+      });
+
+      loggingService.info('TTS engine set successfully', screen: 'VoiceConfigScreen', data: {
+        'engine': engine,
       });
 
       if (mounted) {
@@ -185,7 +217,10 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'VoiceConfigScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -200,11 +235,19 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
   Future<void> _setPiperVoice(String voice) async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Set Piper Voice', screen: 'VoiceConfigScreen', data: {
+        'voice': voice,
+      });
+      
       await apiService.post(AppConstants.piperCurrentEndpoint, data: {'voice': voice});
       
       setState(() {
         _currentPiperVoice = voice;
       });
+
+      loggingService.info('Piper voice updated successfully', screen: 'VoiceConfigScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -214,7 +257,10 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'VoiceConfigScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -229,11 +275,19 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
   Future<void> _setSileroVoice(String voice) async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Set Silero Voice', screen: 'VoiceConfigScreen', data: {
+        'voice': voice,
+      });
+      
       await apiService.post(AppConstants.sileroCurrentEndpoint, data: {'voice': voice});
       
       setState(() {
         _currentSileroVoice = voice;
       });
+
+      loggingService.info('Silero voice updated successfully', screen: 'VoiceConfigScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -243,7 +297,10 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'VoiceConfigScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -258,11 +315,19 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
   Future<void> _setChatterboxVoice(String voice) async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Set Chatterbox Voice', screen: 'VoiceConfigScreen', data: {
+        'voice': voice,
+      });
+      
       await apiService.post(AppConstants.chatterboxCurrentEndpoint, data: {'voice': voice});
       
       setState(() {
         _currentChatterboxVoice = voice;
       });
+
+      loggingService.info('Chatterbox voice updated successfully', screen: 'VoiceConfigScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -272,7 +337,10 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'VoiceConfigScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -288,6 +356,12 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final audioService = Provider.of<AudioService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Preview Voice', screen: 'VoiceConfigScreen', data: {
+        'engine': engine,
+        'voice': voice,
+      });
       
       String endpoint;
       switch (engine) {
@@ -314,6 +388,8 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
         await audioService.playFromBytes(response.data);
       }
 
+      loggingService.info('Voice preview played successfully', screen: 'VoiceConfigScreen');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -322,7 +398,10 @@ class _VoiceConfigScreenState extends State<VoiceConfigScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'VoiceConfigScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

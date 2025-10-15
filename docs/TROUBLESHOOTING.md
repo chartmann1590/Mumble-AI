@@ -1,6 +1,181 @@
 # Troubleshooting Guide
 
-Common issues and solutions for Mumble AI Bot.
+Common issues and solutions for Mumble AI Bot including Flutter app troubleshooting.
+
+## Flutter App Issues
+
+### App Won't Connect to Server
+
+**Symptom:** "Connection failed" or "Server unreachable" error
+
+**Solutions:**
+1. **Check Server URL:**
+   - Verify the server URL is correct (e.g., `http://192.168.1.100:5002`)
+   - Ensure you're using the correct IP address and port
+   - Test the URL in a web browser first
+
+2. **Network Connectivity:**
+   ```bash
+   # Test server connectivity from mobile device
+   ping your-server-ip
+   
+   # Test port accessibility
+   telnet your-server-ip 5002
+   ```
+
+3. **Firewall Configuration:**
+   - Ensure port 5002 is open on the server
+   - Check if firewall is blocking connections
+   - Verify CORS settings allow mobile app access
+
+4. **Server Status:**
+   - Check if Mumble AI server is running
+   - Verify web control panel is accessible at `http://server:5002`
+   - Check server logs for connection errors
+
+### User Selection Issues
+
+**Symptom:** Can't select or create users
+
+**Solutions:**
+1. **Check User Data:**
+   - Verify users exist in the database
+   - Check if user data is properly initialized
+   - Ensure user permissions are correct
+
+2. **Database Connection:**
+   - Verify database is accessible from server
+   - Check database connection logs
+   - Ensure user tables exist and are populated
+
+3. **API Endpoints:**
+   - Test user-related API endpoints
+   - Check if `/api/users` endpoint is working
+   - Verify API responses are valid
+
+### Logging System Issues
+
+**Symptom:** Logs not appearing in web control panel
+
+**Solutions:**
+1. **Check Log Sync:**
+   - Verify logs are being sent to server
+   - Check network connectivity for log transmission
+   - Ensure auto-sync is enabled in app
+
+2. **Server-Side Logging:**
+   - Check if `/api/logs` endpoint is working
+   - Verify `flutter_logs` table exists in database
+   - Check server logs for log processing errors
+
+3. **Log Viewing:**
+   - Access logs at `http://server:5002/logs`
+   - Check if log viewer page loads correctly
+   - Verify log filtering and display functionality
+
+### Audio Playback Issues
+
+**Symptom:** Voice previews not playing
+
+**Solutions:**
+1. **Audio Permissions:**
+   - Grant microphone and audio permissions to the app
+   - Check Android audio settings
+   - Ensure device volume is not muted
+
+2. **Audio Format:**
+   - Verify TTS services are running
+   - Check if audio files are being generated
+   - Test audio playback in web control panel
+
+3. **Network Issues:**
+   - Check if audio files are being downloaded
+   - Verify TTS API endpoints are accessible
+   - Test audio generation from server
+
+### Performance Issues
+
+**Symptom:** App is slow or unresponsive
+
+**Solutions:**
+1. **Memory Management:**
+   - Close other apps to free memory
+   - Restart the app to clear memory cache
+   - Check device available storage
+
+2. **Network Optimization:**
+   - Use stable Wi-Fi connection
+   - Avoid mobile data for large operations
+   - Check network speed and latency
+
+3. **App Optimization:**
+   - Update to latest app version
+   - Clear app cache and data
+   - Restart device if necessary
+
+### Data Synchronization Issues
+
+**Symptom:** Data not updating or syncing properly
+
+**Solutions:**
+1. **Manual Refresh:**
+   - Use pull-to-refresh on data screens
+   - Manually refresh dashboard and other screens
+   - Check if auto-refresh is enabled
+
+2. **Network Connectivity:**
+   - Ensure stable network connection
+   - Check if server is accessible
+   - Verify API endpoints are responding
+
+3. **Data Consistency:**
+   - Check if data exists on server
+   - Verify user permissions for data access
+   - Ensure data is not corrupted
+
+### How to View Flutter App Logs
+
+**Accessing Logs:**
+1. **Web Interface:**
+   - Open browser and navigate to `http://your-server:5002/logs`
+   - Use filters to find specific logs
+   - Enable auto-refresh for real-time monitoring
+
+2. **Log Filtering:**
+   - Filter by log level (DEBUG, INFO, WARNING, ERROR)
+   - Filter by screen/component name
+   - Set log limit for performance
+
+3. **Log Analysis:**
+   - Look for ERROR level logs first
+   - Check WARNING logs for potential issues
+   - Review INFO logs for app behavior
+
+**Common Log Patterns:**
+- **Connection Issues:** Look for network timeout errors
+- **API Failures:** Check for HTTP error responses
+- **User Issues:** Look for authentication or permission errors
+- **Performance:** Check for slow response times
+
+### Beta Testing Issues
+
+**Symptom:** App crashes or behaves unexpectedly
+
+**Solutions:**
+1. **Report Issues:**
+   - Use GitHub/Gitea issues to report bugs
+   - Include device information and Android version
+   - Provide steps to reproduce the issue
+
+2. **Gather Information:**
+   - Check app logs for error details
+   - Note what you were doing when the issue occurred
+   - Include screenshots or screen recordings if helpful
+
+3. **Temporary Workarounds:**
+   - Try restarting the app
+   - Clear app data and reconfigure
+   - Use web control panel as alternative
 
 ## Service Issues
 

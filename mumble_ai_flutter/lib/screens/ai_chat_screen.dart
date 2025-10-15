@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../widgets/message_bubble.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
@@ -33,11 +34,16 @@ class _AiChatScreenState extends State<AiChatScreen> {
   String? _errorMessage;
   String? _ollamaUrl;
   String? _ollamaModel;
+  String? _botPersona;
 
   @override
   void initState() {
     super.initState();
     _loadOllamaConfig();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('AiChatScreen', 'initState');
   }
 
   @override
@@ -48,25 +54,70 @@ class _AiChatScreenState extends State<AiChatScreen> {
   }
 
   Future<void> _loadOllamaConfig() async {
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+    
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.ollamaConfigEndpoint);
-      final config = response.data;
       
-      setState(() {
-        _ollamaUrl = config['url'];
-        _ollamaModel = config['model'];
-      });
+      final data = apiService.safeCastResponseData(response.data);
+      if (data != null) {
+        setState(() {
+          _ollamaUrl = data['url'];
+          _ollamaModel = data['model'];
+        });
+        
+        // Load bot persona
+        await _loadBotPersona();
+        
+        final duration = DateTime.now().difference(startTime);
+        loggingService.logPerformance('Load Ollama Config', duration, screen: 'AiChatScreen');
+        loggingService.info('Ollama config loaded successfully', screen: 'AiChatScreen', data: {
+          'ollamaUrl': _ollamaUrl,
+          'ollamaModel': _ollamaModel,
+        });
+      } else {
+        throw Exception('Invalid data format received from server');
+      }
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Load Ollama Config (ERROR)', duration, screen: 'AiChatScreen');
+      loggingService.logException(e, null, screen: 'AiChatScreen');
+      
       setState(() {
         _errorMessage = 'Failed to load Ollama configuration: ${e.toString()}';
       });
     }
   }
 
+  Future<void> _loadBotPersona() async {
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final response = await apiService.get(AppConstants.personaEndpoint);
+      
+      final data = apiService.safeCastResponseData(response.data);
+      if (data != null) {
+        setState(() {
+          _botPersona = data['persona'] ?? '';
+        });
+      }
+    } catch (e) {
+      // Persona is optional, don't fail if it's not available
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.warning('Failed to load bot persona: ${e.toString()}', screen: 'AiChatScreen');
+    }
+  }
+
   Future<void> _sendMessage() async {
     final message = _messageController.text.trim();
     if (message.isEmpty || _isLoading) return;
+
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logUserAction('Send AI Chat Message', screen: 'AiChatScreen', data: {
+      'messageLength': message.length,
+      'hasPersona': _botPersona != null && _botPersona!.isNotEmpty,
+    });
 
     // Add user message
     final userMessage = ChatMessage(
@@ -100,8 +151,18 @@ class _AiChatScreenState extends State<AiChatScreen> {
         _isLoading = false;
       });
       
+      loggingService.info('AI Chat response received', screen: 'AiChatScreen', data: {
+        'responseLength': response.length,
+        'totalMessages': _messages.length,
+      });
+      
+      // Log conversation to server
+      await _logConversationToServer(message, response);
+      
       _scrollToBottom();
     } catch (e) {
+      loggingService.logException(e, null, screen: 'AiChatScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to get AI response: ${e.toString()}';
@@ -114,21 +175,52 @@ class _AiChatScreenState extends State<AiChatScreen> {
       throw Exception('Ollama configuration not available');
     }
 
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+
     // Create a temporary Dio instance for Ollama API
     final dio = Dio();
     dio.options.baseUrl = _ollamaUrl!;
-    dio.options.connectTimeout = 30000; // 30 seconds for AI responses
-    dio.options.receiveTimeout = 30000;
+    dio.options.connectTimeout = 180000; // 3 minutes for AI responses
+    dio.options.receiveTimeout = 180000; // 3 minutes for AI responses
 
     try {
+      // Build the prompt with persona if available
+      String fullPrompt = message;
+      if (_botPersona != null && _botPersona!.isNotEmpty) {
+        fullPrompt = '${_botPersona}\n\nUser: $message\nAssistant:';
+      }
+
+      loggingService.info('Sending message to Ollama', screen: 'AiChatScreen', data: {
+        'ollamaUrl': _ollamaUrl,
+        'model': _ollamaModel,
+        'hasPersona': _botPersona != null && _botPersona!.isNotEmpty,
+        'promptLength': fullPrompt.length,
+      });
+
       final response = await dio.post('/api/generate', data: {
         'model': _ollamaModel,
-        'prompt': message,
+        'prompt': fullPrompt,
         'stream': false,
+        'options': {
+          'temperature': 0.7,
+          'top_p': 0.9,
+          'max_tokens': 2048,
+        }
+      });
+
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Ollama API Call', duration, screen: 'AiChatScreen', data: {
+        'model': _ollamaModel,
+        'responseLength': response.data['response']?.toString().length ?? 0,
       });
 
       return response.data['response'] ?? 'No response received';
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Ollama API Call (ERROR)', duration, screen: 'AiChatScreen');
+      loggingService.logException(e, null, screen: 'AiChatScreen');
+      
       throw Exception('Ollama API error: ${e.toString()}');
     }
   }
@@ -155,7 +247,27 @@ class _AiChatScreenState extends State<AiChatScreen> {
     );
   }
 
+  Future<void> _logConversationToServer(String userMessage, String aiResponse) async {
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      await apiService.post('/api/conversations/ai_chat', data: {
+        'user_message': userMessage,
+        'ai_response': aiResponse,
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+      
+      loggingService.info('AI Chat conversation logged to server', screen: 'AiChatScreen');
+    } catch (e) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.warning('Failed to log AI chat conversation to server: ${e.toString()}', screen: 'AiChatScreen');
+    }
+  }
+
   void _clearChat() {
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -168,6 +280,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
           ),
           TextButton(
             onPressed: () {
+              loggingService.logUserAction('Clear Chat', screen: 'AiChatScreen', data: {
+                'messageCount': _messages.length,
+              });
+              
               setState(() {
                 _messages.clear();
               });

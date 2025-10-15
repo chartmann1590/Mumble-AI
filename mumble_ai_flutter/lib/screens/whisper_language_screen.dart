@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
@@ -21,6 +22,11 @@ class _WhisperLanguageScreenState extends State<WhisperLanguageScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('WhisperLanguageScreen', 'initState');
+    
     _loadWhisperLanguage();
   }
 
@@ -32,13 +38,22 @@ class _WhisperLanguageScreenState extends State<WhisperLanguageScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final response = await apiService.get(AppConstants.whisperLanguageEndpoint);
       
       setState(() {
         _selectedLanguage = response.data['language'] ?? 'auto';
         _isLoading = false;
       });
-    } catch (e) {
+      
+      loggingService.info('Whisper language loaded successfully', screen: 'WhisperLanguageScreen', data: {
+        'language': _selectedLanguage,
+      });
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'WhisperLanguageScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load whisper language setting: ${e.toString()}';
@@ -53,9 +68,17 @@ class _WhisperLanguageScreenState extends State<WhisperLanguageScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Save Whisper Language', screen: 'WhisperLanguageScreen', data: {
+        'language': _selectedLanguage,
+      });
+      
       await apiService.post(AppConstants.whisperLanguageEndpoint, data: {
         'language': _selectedLanguage,
       });
+
+      loggingService.info('Whisper language saved successfully', screen: 'WhisperLanguageScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -65,7 +88,10 @@ class _WhisperLanguageScreenState extends State<WhisperLanguageScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'WhisperLanguageScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

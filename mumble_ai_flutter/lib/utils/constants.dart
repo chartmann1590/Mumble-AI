@@ -3,6 +3,16 @@ class AppConstants {
   static const String appName = 'Mumble AI Control Panel';
   static const String appVersion = '1.0.0';
   
+  // API Response Field Names (as returned by web-control-panel)
+  // Note: host.docker.internal URLs are automatically transformed to use server IP
+  //
+  // /api/ollama/config GET: {url: string, model: string}
+  // /api/ollama/vision_config GET: {vision_model: string}
+  // /api/ollama/memory_model_config GET: {memory_extraction_model: string}
+  // /api/piper/current GET: {voice: string}
+  // /api/silero/current GET: {voice: string}
+  // /api/chatterbox/current GET: {voice: string}
+  
   // API Endpoints
   static const String healthEndpoint = '/api/stats';
   static const String statsEndpoint = '/api/stats';

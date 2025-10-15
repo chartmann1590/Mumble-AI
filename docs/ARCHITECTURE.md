@@ -17,7 +17,7 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
 │  │Android App   │  │ Landing Page │  │ Email Client │  │ Mobile Browser  │ │
-│  │(Flutter)     │  │(Port 5007)   │  │(IMAP/SMTP)   │  │(All Services)   │ │
+│  │(Flutter Beta)│  │(Port 5007)   │  │(IMAP/SMTP)   │  │(All Services)   │ │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
 └─────────┼──────────────────┼──────────────────┼───────────────────┼─────────┘
           │                  │                  │                   │
@@ -114,6 +114,17 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 7. Backend updates database
 8. Bot picks up changes on next message
 
+### Flutter App Flow
+
+1. User launches Flutter app on Android device
+2. App connects to Mumble AI server via HTTP API
+3. User selection screen allows multi-user management
+4. App requests data from all available endpoints
+5. Real-time data synchronization with server
+6. Comprehensive logging system captures all actions
+7. Logs auto-sync to server every 50 entries
+8. Server-side log viewer available at `/logs` endpoint
+
 ## Services
 
 ### 1. Mumble Server
@@ -180,6 +191,8 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Model/voice selection
   - Persona management
   - History viewing
+  - Flutter app log viewer (`/logs`)
+  - Multi-user support
 
 ### 8. SIP Bridge
 
@@ -347,6 +360,18 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 | language | VARCHAR(10) | Voice language |
 | created_at | TIMESTAMP | When voice was created |
 | is_deleted | BOOLEAN | Soft delete flag |
+
+### flutter_logs
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| level | VARCHAR(10) | Log level (DEBUG, INFO, WARNING, ERROR) |
+| message | TEXT | Log message content |
+| screen | VARCHAR(100) | Screen/component where log occurred |
+| data | JSONB | Additional log data (optional) |
+| device_info | JSONB | Device information (platform, timestamp) |
+| created_at | TIMESTAMP | When log was created |
 
 ## Audio Processing
 

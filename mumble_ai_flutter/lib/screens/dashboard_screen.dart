@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/storage_service.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../models/stats.dart';
 import '../models/schedule_event.dart';
 import '../widgets/stat_card.dart';
@@ -27,6 +28,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadData();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.info('Dashboard screen loaded', screen: 'DashboardScreen');
   }
 
   Future<void> _loadData() async {
@@ -57,6 +62,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         });
       }
     } catch (e) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, null, screen: 'DashboardScreen');
+      
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -67,40 +75,131 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadStats() async {
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+    
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.statsEndpoint);
-      final stats = Stats.fromJson(response.data);
       
-      if (mounted) {
-        setState(() {
-          _stats = stats;
-        });
+      if (response.data != null) {
+        // Handle both Map and List responses from the API
+        dynamic data = response.data;
+        
+        // If it's a list, take the first item (assuming it's a single stats object)
+        if (data is List && data.isNotEmpty) {
+          data = data.first;
+        }
+        
+        // Now try to cast to Map
+        if (data is Map<String, dynamic>) {
+          final stats = Stats.fromJson(data);
+          if (mounted) {
+            setState(() {
+              _stats = stats;
+            });
+          }
+          
+          final duration = DateTime.now().difference(startTime);
+          loggingService.logPerformance('Load Stats', duration, screen: 'DashboardScreen');
+        } else if (data is Map) {
+          // Handle Map<dynamic, dynamic> case
+          final Map<String, dynamic> statsData = {};
+          data.forEach((key, value) {
+            statsData[key.toString()] = value;
+          });
+          
+          final stats = Stats.fromJson(statsData);
+          if (mounted) {
+            setState(() {
+              _stats = stats;
+            });
+          }
+          
+          final duration = DateTime.now().difference(startTime);
+          loggingService.logPerformance('Load Stats', duration, screen: 'DashboardScreen');
+        } else {
+          throw Exception('Invalid data format received from stats endpoint. Expected Map or List, got ${data.runtimeType}');
+        }
+      } else {
+        throw Exception('No data received from stats endpoint');
       }
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Load Stats (ERROR)', duration, screen: 'DashboardScreen');
+      loggingService.logException(e, null, screen: 'DashboardScreen');
+      
+      print('Error loading stats: $e');
       throw Exception('Failed to load statistics: $e');
     }
   }
 
   Future<void> _loadUpcomingEvents() async {
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+    
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final storageService = Provider.of<StorageService>(context, listen: false);
+      
+      final queryParams = <String, dynamic>{
+        'days': 7, 
+        'limit': 5
+      };
+      
+      // Include the selected user from storage
+      final currentUser = await storageService.getSelectedUser();
+      if (currentUser != null) {
+        queryParams['user'] = currentUser;
+      }
+      
       final response = await apiService.get(
         AppConstants.upcomingEventsEndpoint,
-        queryParameters: {'days': 7, 'limit': 5},
+        queryParameters: queryParams,
       );
       
-      final events = (response.data as List)
-          .map((json) => ScheduleEvent.fromJson(json))
-          .toList();
-      
-      if (mounted) {
-        setState(() {
-          _upcomingEvents = events;
-        });
+      if (response.data != null) {
+        // Handle both List and other response formats
+        dynamic data = response.data;
+        
+        if (data is List) {
+          final events = data
+              .map((json) => ScheduleEvent.fromJson(json))
+              .toList();
+          
+          if (mounted) {
+            setState(() {
+              _upcomingEvents = events;
+            });
+          }
+          
+          final duration = DateTime.now().difference(startTime);
+          loggingService.logPerformance('Load Upcoming Events', duration, screen: 'DashboardScreen');
+        } else {
+          // If it's not a list, treat it as empty
+          if (mounted) {
+            setState(() {
+              _upcomingEvents = [];
+            });
+          }
+          
+          final duration = DateTime.now().difference(startTime);
+          loggingService.logPerformance('Load Upcoming Events', duration, screen: 'DashboardScreen');
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _upcomingEvents = [];
+          });
+        }
       }
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Load Upcoming Events (ERROR)', duration, screen: 'DashboardScreen');
+      loggingService.logException(e, null, screen: 'DashboardScreen');
+      
       // Don't throw error for upcoming events, just log it
+      print('Error loading upcoming events: $e');
       if (mounted) {
         setState(() {
           _upcomingEvents = [];
@@ -117,7 +216,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       actions: [
         IconButton(
           icon: const Icon(Icons.refresh),
-          onPressed: _loadData,
+          onPressed: () {
+            final loggingService = Provider.of<LoggingService>(context, listen: false);
+            loggingService.logUserAction('Refresh Dashboard', screen: 'DashboardScreen');
+            _loadData();
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.bug_report),
+          onPressed: _sendLogsToServer,
+          tooltip: 'Send Logs to Server',
         ),
           PopupMenuButton<String>(
             onSelected: (value) {
@@ -265,7 +373,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             const SizedBox(height: AppTheme.spacingL),
             ElevatedButton.icon(
-              onPressed: _loadData,
+              onPressed: () {
+                final loggingService = Provider.of<LoggingService>(context, listen: false);
+                loggingService.logUserAction('Retry Dashboard Load', screen: 'DashboardScreen');
+                _loadData();
+              },
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
             ),
@@ -499,7 +611,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return AppTheme.primaryColor;
   }
 
+  Future<void> _sendLogsToServer() async {
+    try {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      
+      final success = await loggingService.sendLogsToServer(apiService);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success 
+                ? 'Logs sent to server successfully' 
+                : 'Failed to send logs to server'),
+            backgroundColor: success ? AppTheme.successColor : AppTheme.errorColor,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error sending logs: ${e.toString()}'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _disconnect() async {
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logUserAction('Disconnect from Server', screen: 'DashboardScreen');
+    loggingService.logNavigation('DashboardScreen', 'ServerConnectScreen');
+    
     final storageService = Provider.of<StorageService>(context, listen: false);
     await storageService.removeServerUrl();
     if (mounted) {

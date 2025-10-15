@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
@@ -26,6 +27,11 @@ class _PersonaScreenState extends State<PersonaScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('PersonaScreen', 'initState');
+    
     _loadPersona();
     _personaController.addListener(_updateCharacterCount);
   }
@@ -51,6 +57,8 @@ class _PersonaScreenState extends State<PersonaScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final response = await apiService.get(AppConstants.personaEndpoint);
       
       setState(() {
@@ -58,7 +66,14 @@ class _PersonaScreenState extends State<PersonaScreen> {
         _characterCount = _personaController.text.length;
         _isLoading = false;
       });
-    } catch (e) {
+      
+      loggingService.info('Persona loaded successfully', screen: 'PersonaScreen', data: {
+        'characterCount': _characterCount,
+      });
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'PersonaScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load persona: ${e.toString()}';
@@ -83,9 +98,17 @@ class _PersonaScreenState extends State<PersonaScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Save Persona', screen: 'PersonaScreen', data: {
+        'characterCount': _personaController.text.trim().length,
+      });
+      
       await apiService.post(AppConstants.personaEndpoint, data: {
         'persona': _personaController.text.trim(),
       });
+
+      loggingService.info('Persona saved successfully', screen: 'PersonaScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -95,7 +118,10 @@ class _PersonaScreenState extends State<PersonaScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'PersonaScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -128,6 +154,12 @@ class _PersonaScreenState extends State<PersonaScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Enhance Persona', screen: 'PersonaScreen', data: {
+        'originalLength': _personaController.text.trim().length,
+      });
+      
       final response = await apiService.post(AppConstants.personaEnhanceEndpoint, data: {
         'persona': _personaController.text.trim(),
       });
@@ -135,6 +167,10 @@ class _PersonaScreenState extends State<PersonaScreen> {
       setState(() {
         _enhancedPersonaController.text = response.data['enhanced_persona'] ?? '';
         _showEnhanced = true;
+      });
+
+      loggingService.info('Persona enhanced successfully', screen: 'PersonaScreen', data: {
+        'enhancedLength': _enhancedPersonaController.text.length,
       });
 
       if (mounted) {
@@ -145,7 +181,10 @@ class _PersonaScreenState extends State<PersonaScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'PersonaScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

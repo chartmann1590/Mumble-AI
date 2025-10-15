@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../services/api_service.dart';
+import '../services/storage_service.dart';
+import '../services/logging_service.dart';
 import '../models/schedule_event.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
@@ -25,6 +27,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('ScheduleScreen', 'initState');
+    
     _loadData();
   }
 
@@ -43,7 +50,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       setState(() {
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'ScheduleScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load data: ${e.toString()}';
@@ -54,10 +64,15 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   Future<void> _loadEvents() async {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final storageService = Provider.of<StorageService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final queryParams = <String, dynamic>{};
       
-      if (_selectedUser != null) {
-        queryParams['user'] = _selectedUser;
+      // Always include the selected user from storage
+      final currentUser = await storageService.getSelectedUser();
+      if (currentUser != null) {
+        queryParams['user'] = currentUser;
       }
 
       final response = await apiService.get(
@@ -79,7 +94,14 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       setState(() {
         _events = events;
       });
-    } catch (e) {
+      
+      loggingService.info('Schedule events loaded successfully', screen: 'ScheduleScreen', data: {
+        'count': events.length,
+        'user': currentUser,
+      });
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'ScheduleScreen');
       throw Exception('Failed to load events: $e');
     }
   }
@@ -90,9 +112,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       final response = await apiService.get(AppConstants.scheduleUsersEndpoint);
       
       setState(() {
-        _users = List<String>.from(response.data);
+        _users = (response.data as List).map((item) => item.toString()).toList();
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'ScheduleScreen');
+      
       setState(() {
         _users = [];
       });
@@ -122,10 +147,20 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     if (confirmed == true) {
       try {
         final apiService = Provider.of<ApiService>(context, listen: false);
+        final loggingService = Provider.of<LoggingService>(context, listen: false);
+        
+        loggingService.logUserAction('Delete Event', screen: 'ScheduleScreen', data: {
+          'eventId': eventId,
+        });
+        
         await apiService.delete('${AppConstants.scheduleEndpoint}/$eventId');
         
         setState(() {
           _events.removeWhere((event) => event.id == eventId);
+        });
+
+        loggingService.info('Event deleted successfully', screen: 'ScheduleScreen', data: {
+          'eventId': eventId,
         });
 
         if (mounted) {
@@ -136,7 +171,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             ),
           );
         }
-      } catch (e) {
+      } catch (e, stackTrace) {
+        final loggingService = Provider.of<LoggingService>(context, listen: false);
+        loggingService.logException(e, stackTrace, screen: 'ScheduleScreen');
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -661,6 +699,8 @@ class _AddEventDialogState extends State<_AddEventDialog> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final dateTime = DateTime(
         _selectedDate.year,
         _selectedDate.month,
@@ -668,6 +708,13 @@ class _AddEventDialogState extends State<_AddEventDialog> {
         _selectedTime.hour,
         _selectedTime.minute,
       );
+
+      loggingService.logUserAction('Add Event', screen: 'ScheduleScreen', data: {
+        'user': _userController.text.trim(),
+        'title': _titleController.text.trim(),
+        'importance': _importance,
+        'emailReminder': _emailReminder,
+      });
 
       await apiService.post(AppConstants.scheduleEndpoint, data: {
         'user_name': _userController.text.trim(),
@@ -680,6 +727,8 @@ class _AddEventDialogState extends State<_AddEventDialog> {
         'recipient_email': _recipientEmailController.text.trim(),
       });
 
+      loggingService.info('Event added successfully', screen: 'ScheduleScreen');
+
       widget.onEventAdded();
       Navigator.pop(context);
 
@@ -691,7 +740,10 @@ class _AddEventDialogState extends State<_AddEventDialog> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'ScheduleScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -940,6 +992,8 @@ class _EditEventDialogState extends State<_EditEventDialog> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final dateTime = DateTime(
         _selectedDate.year,
         _selectedDate.month,
@@ -947,6 +1001,13 @@ class _EditEventDialogState extends State<_EditEventDialog> {
         _selectedTime.hour,
         _selectedTime.minute,
       );
+
+      loggingService.logUserAction('Update Event', screen: 'ScheduleScreen', data: {
+        'eventId': widget.event.id,
+        'user': _userController.text.trim(),
+        'title': _titleController.text.trim(),
+        'importance': _importance,
+      });
 
       await apiService.put('${AppConstants.scheduleEndpoint}/${widget.event.id}', data: {
         'user_name': _userController.text.trim(),
@@ -957,6 +1018,10 @@ class _EditEventDialogState extends State<_EditEventDialog> {
         'email_reminder': _emailReminder,
         'reminder_minutes': _reminderMinutes,
         'recipient_email': _recipientEmailController.text.trim(),
+      });
+
+      loggingService.info('Event updated successfully', screen: 'ScheduleScreen', data: {
+        'eventId': widget.event.id,
       });
 
       widget.onEventUpdated();
@@ -970,7 +1035,10 @@ class _EditEventDialogState extends State<_EditEventDialog> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'ScheduleScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

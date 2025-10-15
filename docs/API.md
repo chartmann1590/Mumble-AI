@@ -14,6 +14,7 @@ Complete API documentation for all Mumble AI Bot services.
 - [Email Summary Service API](#email-summary-service-api) (Port 5006)
 - [Advanced Search System](#advanced-search-system)
 - [Topic State Tracking](#topic-state-tracking)
+- [Flutter App Logging API](#flutter-app-logging-api)
 - [SIP Bridge](#sip-bridge) (Port 5060)
 - [Mumble Web Client](#mumble-web-client) (Port 8081)
 
@@ -1302,6 +1303,285 @@ The system now tracks conversation topics and their resolution state for improve
 - `active` - Current conversation topic being discussed
 - `resolved` - Topic that has been fully addressed
 - `switched` - Topic that has been changed or abandoned
+
+## Flutter App Logging API
+
+Base URL: `http://localhost:5002`
+
+The Flutter app logging system provides comprehensive logging capabilities for the Android mobile app, including automatic log synchronization and server-side log viewing.
+
+### Receive Logs from Flutter App
+
+#### Submit Logs
+
+**Endpoint:** `POST /api/logs`
+
+Receives logs from the Flutter Android app for centralized logging and debugging.
+
+**Request Body:**
+```json
+{
+  "logs": [
+    {
+      "level": "INFO",
+      "message": "User connected to server",
+      "screen": "ServerConnectScreen",
+      "data": {
+        "server_url": "http://192.168.1.100:5002",
+        "connection_time": "2025-01-15T10:30:00Z"
+      },
+      "timestamp": "2025-01-15T10:30:00Z"
+    },
+    {
+      "level": "ERROR",
+      "message": "Failed to load memories",
+      "screen": "MemoriesScreen",
+      "data": {
+        "error": "Network timeout",
+        "retry_count": 3
+      },
+      "timestamp": "2025-01-15T10:31:00Z"
+    }
+  ],
+  "device_info": {
+    "platform": "android",
+    "timestamp": "2025-01-15T10:30:00Z"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "logs_received": 2,
+  "message": "Logs successfully stored"
+}
+```
+
+**Error Response:**
+```json
+{
+  "error": "Invalid log format",
+  "details": "Missing required field: level"
+}
+```
+
+### Retrieve Logs
+
+#### Get Logs with Filtering
+
+**Endpoint:** `GET /api/logs`
+
+Retrieve logs from the Flutter app with optional filtering.
+
+**Query Parameters:**
+- `level` (optional) - Filter by log level (DEBUG, INFO, WARNING, ERROR)
+- `screen` (optional) - Filter by screen/component name
+- `limit` (optional) - Number of logs to return (default: 100, max: 1000)
+
+**Example Request:**
+```bash
+GET /api/logs?level=ERROR&screen=MemoriesScreen&limit=50
+```
+
+**Response:**
+```json
+{
+  "logs": [
+    {
+      "id": 123,
+      "level": "ERROR",
+      "message": "Failed to load memories",
+      "screen": "MemoriesScreen",
+      "data": {
+        "error": "Network timeout",
+        "retry_count": 3
+      },
+      "device_info": {
+        "platform": "android",
+        "timestamp": "2025-01-15T10:30:00Z"
+      },
+      "created_at": "2025-01-15T10:31:00Z"
+    }
+  ],
+  "count": 1,
+  "total": 150
+}
+```
+
+### Logs Web Interface
+
+#### View Logs Page
+
+**Endpoint:** `GET /logs`
+
+Web-based log viewer interface for viewing Flutter app logs.
+
+**Features:**
+- Real-time log display
+- Filtering by level, screen, and limit
+- Auto-refresh capability (30-second intervals)
+- Log statistics and counts
+- Responsive design for mobile and desktop
+
+**Access:** Navigate to `http://localhost:5002/logs` in your browser
+
+### Log Levels
+
+The Flutter app uses the following log levels:
+
+- **DEBUG**: Detailed debugging information for development
+- **INFO**: General information about app operation
+- **WARNING**: Warning messages for potential issues
+- **ERROR**: Error messages for failures and exceptions
+
+### Log Data Structure
+
+Each log entry contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `level` | String | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `message` | String | Log message content |
+| `screen` | String | Screen/component where log occurred |
+| `data` | Object | Additional contextual data (optional) |
+| `timestamp` | String | ISO 8601 timestamp of log creation |
+
+### Auto-Sync Behavior
+
+The Flutter app automatically syncs logs to the server:
+
+- **Trigger**: Every 50 log entries or when app is backgrounded
+- **Retry Logic**: Automatic retry with exponential backoff
+- **Offline Handling**: Logs are stored locally and synced when connection is restored
+- **Error Handling**: Failed syncs are retried on next app launch
+
+### Examples
+
+#### cURL Examples
+
+Submit logs:
+```bash
+curl -X POST http://localhost:5002/api/logs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "logs": [
+      {
+        "level": "INFO",
+        "message": "App started",
+        "screen": "main",
+        "timestamp": "2025-01-15T10:30:00Z"
+      }
+    ],
+    "device_info": {
+      "platform": "android",
+      "timestamp": "2025-01-15T10:30:00Z"
+    }
+  }'
+```
+
+Get error logs:
+```bash
+curl "http://localhost:5002/api/logs?level=ERROR&limit=10"
+```
+
+#### Python Examples
+
+```python
+import requests
+
+# Submit logs
+logs_data = {
+    "logs": [
+        {
+            "level": "INFO",
+            "message": "User action completed",
+            "screen": "DashboardScreen",
+            "data": {"action": "refresh_stats"},
+            "timestamp": "2025-01-15T10:30:00Z"
+        }
+    ],
+    "device_info": {
+        "platform": "android",
+        "timestamp": "2025-01-15T10:30:00Z"
+    }
+}
+
+response = requests.post('http://localhost:5002/api/logs', json=logs_data)
+print(response.json())
+
+# Get logs
+response = requests.get('http://localhost:5002/api/logs?level=WARNING&limit=20')
+logs = response.json()
+for log in logs['logs']:
+    print(f"{log['level']}: {log['message']} ({log['screen']})")
+```
+
+#### JavaScript Examples
+
+```javascript
+// Submit logs
+const logsData = {
+  logs: [
+    {
+      level: 'ERROR',
+      message: 'API call failed',
+      screen: 'ApiService',
+      data: { endpoint: '/api/memories', status: 500 },
+      timestamp: new Date().toISOString()
+    }
+  ],
+  device_info: {
+    platform: 'android',
+    timestamp: new Date().toISOString()
+  }
+};
+
+fetch('http://localhost:5002/api/logs', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(logsData)
+})
+.then(response => response.json())
+.then(data => console.log('Logs submitted:', data));
+
+// Get logs
+fetch('http://localhost:5002/api/logs?level=ERROR&screen=MemoriesScreen')
+  .then(response => response.json())
+  .then(data => {
+    data.logs.forEach(log => {
+      console.log(`${log.level}: ${log.message}`);
+    });
+  });
+```
+
+### Error Handling
+
+All logging endpoints return appropriate HTTP status codes:
+
+- `200 OK`: Success
+- `400 Bad Request`: Invalid request format or missing required fields
+- `500 Internal Server Error`: Server error during log processing
+
+Error responses include detailed error messages:
+```json
+{
+  "error": "Validation failed",
+  "details": "Log level must be one of: DEBUG, INFO, WARNING, ERROR"
+}
+```
+
+### Rate Limiting
+
+Currently, there is no rate limiting on log submission. This may be added in future versions to prevent log spam.
+
+### Security Considerations
+
+- Logs may contain sensitive information (user actions, API calls, error details)
+- Access to logs should be restricted to authorized users
+- Consider implementing authentication for the `/logs` web interface
+- Log data is stored in PostgreSQL and should be backed up regularly
 
 ## SIP Bridge
 

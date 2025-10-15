@@ -1,6 +1,6 @@
 # Configuration Guide
 
-Complete configuration reference for Mumble AI Bot.
+Complete configuration reference for Mumble AI Bot including Flutter app configuration.
 
 ## Environment Variables
 
@@ -141,6 +141,135 @@ VISION_MODEL_URL=http://host.docker.internal:11434
 MEMORY_MODEL=mistral
 MEMORY_MODEL_URL=http://host.docker.internal:11434
 ```
+
+### Flutter App Configuration
+
+#### Server Connection
+
+The Flutter app requires configuration to connect to your Mumble AI server:
+
+**Server URL Configuration:**
+- **Default**: `http://localhost:5002` (for local development)
+- **Remote Server**: `http://your-server-ip:5002` (for remote access)
+- **HTTPS**: `https://your-domain.com:5002` (for production with SSL)
+
+**Network Requirements:**
+- **Port Access**: Ensure port 5002 is accessible from your mobile device
+- **Firewall**: Configure firewall to allow connections on port 5002
+- **CORS**: The web control panel must allow cross-origin requests from mobile devices
+
+#### User Management
+
+**Multi-User Support:**
+- **User Selection**: Choose from existing users or create new ones
+- **User-Specific Data**: Each user has separate memories, schedules, and conversations
+- **Persistent Selection**: App remembers the last selected user
+- **User Creation**: Create new users directly from the app
+
+**User Data Isolation:**
+- **Memories**: Each user's memories are separate and private
+- **Schedules**: Calendar events are user-specific
+- **Conversations**: Chat history is isolated per user
+- **Settings**: User preferences are maintained separately
+
+#### Logging System Configuration
+
+**Automatic Logging:**
+- **Log Levels**: DEBUG, INFO, WARNING, ERROR
+- **Auto-Sync**: Logs automatically sync to server every 50 entries
+- **Local Storage**: Logs stored locally until synced
+- **Retry Logic**: Failed syncs are retried automatically
+
+**Log Viewing:**
+- **Web Interface**: View logs at `http://your-server:5002/logs`
+- **Filtering**: Filter by level, screen, and time range
+- **Real-Time**: Auto-refresh for live log monitoring
+- **Export**: Download logs for analysis
+
+**Log Configuration:**
+```bash
+# Log retention (server-side)
+LOG_RETENTION_DAYS=30  # Keep logs for 30 days
+
+# Log level filtering
+MIN_LOG_LEVEL=INFO  # Only store INFO and above
+
+# Log storage limits
+MAX_LOG_ENTRIES=10000  # Maximum logs per user
+```
+
+#### Audio Configuration
+
+**Voice Preview:**
+- **Audio Playback**: Preview TTS voices before selection
+- **Audio Format**: WAV format for high quality
+- **Volume Control**: Integration with system volume
+- **Audio Permissions**: Requires microphone permission for voice features
+
+**TTS Integration:**
+- **Engine Support**: Piper, Silero, and Chatterbox TTS
+- **Voice Selection**: Choose from 70+ available voices
+- **Audio Quality**: High-quality audio output
+- **Offline Support**: Basic functionality without network
+
+#### Performance Configuration
+
+**Memory Management:**
+- **Cache Size**: Local cache for frequently accessed data
+- **Memory Limits**: Configurable memory usage limits
+- **Garbage Collection**: Automatic cleanup of unused resources
+- **Background Sync**: Efficient background data synchronization
+
+**Network Optimization:**
+- **Connection Pooling**: Reuse HTTP connections
+- **Request Batching**: Batch multiple API calls
+- **Timeout Settings**: Configurable request timeouts
+- **Retry Logic**: Automatic retry for failed requests
+
+#### Security Configuration
+
+**Data Protection:**
+- **Local Storage**: Encrypted local storage for sensitive data
+- **Network Security**: HTTPS support for secure connections
+- **Authentication**: Optional authentication for server access
+- **Data Privacy**: User data isolation and protection
+
+**Access Control:**
+- **User Permissions**: Role-based access control
+- **API Security**: Rate limiting and request validation
+- **Log Security**: Secure log storage and access
+- **Device Management**: Device registration and management
+
+#### Beta Testing Configuration
+
+**Testing Settings:**
+- **Debug Mode**: Enable detailed logging and debugging
+- **Performance Monitoring**: Track app performance metrics
+- **Crash Reporting**: Automatic crash detection and reporting
+- **User Feedback**: Built-in feedback collection system
+
+**Development Configuration:**
+```bash
+# Flutter app development settings
+FLUTTER_DEBUG=true
+FLUTTER_VERBOSE_LOGGING=true
+FLUTTER_PERFORMANCE_MONITORING=true
+FLUTTER_CRASH_REPORTING=true
+```
+
+#### Troubleshooting Configuration
+
+**Debug Settings:**
+- **Verbose Logging**: Enable detailed debug information
+- **Network Debugging**: Log all network requests and responses
+- **Performance Profiling**: Track app performance metrics
+- **Error Reporting**: Detailed error reporting and stack traces
+
+**Recovery Settings:**
+- **Auto-Recovery**: Automatic recovery from common errors
+- **Fallback Modes**: Graceful degradation when features fail
+- **Data Backup**: Automatic backup of user data
+- **Restore Options**: Data restoration capabilities
 
 ### Vision AI Configuration
 

@@ -2,7 +2,7 @@
 
 A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers with advanced speech recognition, multiple text-to-speech engines, intelligent memory systems, email integration, and voice cloning capabilities.
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 
@@ -35,7 +35,7 @@ A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers wit
 - **Email Integration**: Two-way email communication with AI-powered responses and attachment processing
 - **Web Control Panel**: Comprehensive management interface for all configuration
 - **TTS Voice Generator**: Beautiful standalone web interface for voice generation and cloning
-- **Android App** (🚧 **In Development**): Flutter-based mobile app for remote management and AI chat
+- **Android App** (🧪 **Beta Testing**): Flutter-based mobile app for remote management and AI chat
 
 ### 📧 Email System
 - **Two-Way Email**: Send emails to the bot and receive intelligent AI responses
@@ -71,40 +71,51 @@ A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers wit
 - **Download Support**: Generate and download high-quality WAV files
 - **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
 
-### 📱 Android Mobile App (🚧 In Development)
+### 📱 Android Mobile App (🧪 Beta Testing)
 
-A Flutter-based Android application that provides mobile access to the Mumble AI system:
+A Flutter-based Android application that provides comprehensive mobile access to the Mumble AI system:
 
-**⚠️ Development Status**: This app is currently in active development and may not be fully functional yet. Features are being implemented and tested.
+**🧪 Beta Testing Status**: This app is now in beta testing phase with all core features implemented and functional. We're seeking user feedback and testing before production release.
 
-**Planned Features**:
+**✅ Implemented Features**:
 - **Server Connection Management**: Connect to your Mumble AI server remotely
+- **Multi-User Support**: User selection screen for managing multiple users
 - **AI Chat Interface**: Direct text chat with the AI assistant
-- **Dashboard**: View statistics and upcoming events
+- **Dashboard**: View statistics and upcoming events with real-time updates
 - **Configuration Management**: Configure Ollama models, TTS voices, and settings
-- **Memory Management**: View and manage persistent memories
+- **Memory Management**: View and manage persistent memories with filtering
 - **Schedule Management**: Add, edit, and view calendar events
-- **Email Settings**: Configure email integration
-- **Voice Configuration**: Select and preview TTS voices
-- **Persona Management**: Edit and enhance bot personality
+- **Email Settings**: Configure email integration and view email logs
+- **Voice Configuration**: Select and preview TTS voices from all engines
+- **Persona Management**: Edit and enhance bot personality with AI assistance
+- **Advanced Settings**: Fine-tune AI behavior and memory limits
+- **Comprehensive Logging**: Auto-sync logs to server for debugging
+- **Error Handling**: Enhanced crash reporting and error recovery
 
 **Current Status**:
-- ✅ Core app structure and navigation
-- ✅ Server connection and API integration
-- ✅ Dashboard with statistics
-- ✅ AI chat interface
-- ✅ Configuration screens
-- ✅ Memory and schedule management
-- 🚧 Testing and bug fixes in progress
-- 🚧 Final polish and optimization
+- ✅ All 15+ screens fully functional
+- ✅ Complete API integration with all endpoints
+- ✅ Multi-user selection and management
+- ✅ Comprehensive logging system with auto-sync
+- ✅ Enhanced error handling and crash reporting
+- ✅ Audio playback for voice previews
+- ✅ Real-time data synchronization
+- 🧪 Beta testing phase - seeking user feedback
+- 🧪 Performance optimization in progress
 
-**Installation** (When Ready):
+**Installation** (Beta Version):
 1. Download the APK from the `mumble_ai_flutter/build/app/outputs/flutter-apk/` directory
 2. Install on Android device (API level 21+)
 3. Configure server connection
 4. Start managing your Mumble AI system remotely
 
-**Note**: This is an experimental feature. The web control panel remains the primary and most stable interface for system management.
+**Beta Testing**:
+- Report bugs and issues via GitHub/Gitea issues
+- Provide feedback on user experience and performance
+- Test all features and report any problems
+- The web control panel remains the primary interface for production use
+
+**Note**: This is a beta version. While fully functional, it's still being tested and optimized based on user feedback.
 
 ### 🔧 Technical Features
 - **Docker Compose**: Full stack deployment with one command
@@ -791,12 +802,14 @@ Download additional voices from https://github.com/rhasspy/piper and update the 
 
 ## Recent Updates
 
-### v1.3.1 - Android Mobile App Development (January 15, 2025)
-- **Android App**: Started development of Flutter-based Android mobile app
-- **Mobile Interface**: Complete mobile interface for remote Mumble AI management
-- **AI Chat**: Direct text chat with AI assistant from mobile device
-- **Remote Management**: Configure and monitor system remotely via mobile app
-- **Status**: In active development - features being implemented and tested
+### v1.4.0 - Android Mobile App Beta Release (January 15, 2025)
+- **Android App Beta**: Flutter-based Android mobile app ready for beta testing
+- **Complete Feature Set**: All 15+ screens fully functional with comprehensive API integration
+- **Multi-User Support**: User selection screen for managing multiple users
+- **Logging System**: Comprehensive logging with auto-sync to server and web-based log viewer
+- **Enhanced UX**: Improved error handling, crash reporting, and real-time data synchronization
+- **Beta Testing**: Seeking user feedback and testing before production release
+- **Status**: Beta testing phase - fully functional but optimizing based on feedback
 
 ### v1.3.0 - Topic State Tracking & Advanced Search System (January 15, 2025)
 - **Topic State Tracking**: New conversation topic management with active, resolved, and switched states
@@ -824,6 +837,7 @@ Download additional voices from https://github.com/rhasspy/piper and update the 
 - [API Reference](docs/API.md) - Complete API documentation
 - [Configuration](docs/CONFIGURATION.md) - Detailed configuration guide
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Flutter App Beta Release](docs/CHANGELOG_FLUTTER_APP_BETA.md) - Android mobile app beta testing documentation
 - [Topic State & Search Improvements](docs/CHANGELOG_TOPIC_STATE_AND_SEARCH_IMPROVEMENTS.md) - Latest AI enhancements
 - [Chatterbox TTS Complete Guide](docs/CHATTERBOX_TTS_COMPLETE_GUIDE.md) - Voice cloning service documentation
 - [Memory Retry & Timeout Improvements](docs/CHANGELOG_MEMORY_RETRY_AND_TIMEOUT_IMPROVEMENTS.md) - Reliability enhancements

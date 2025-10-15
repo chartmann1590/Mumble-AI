@@ -1,17 +1,20 @@
 # Mumble AI Flutter Control Panel
 
-A comprehensive Flutter Android application for managing and controlling the Mumble AI system. This app provides a mobile interface to all the features available in the web control panel, plus additional mobile-specific functionality.
+A comprehensive Flutter Android application for managing and controlling the Mumble AI system. This app provides a complete mobile interface to all the features available in the web control panel, plus additional mobile-specific functionality.
+
+**🧪 Beta Testing Phase**: This app is now in beta testing with all core features implemented and functional. We're seeking user feedback and testing before production release.
 
 ## Features
 
 ### ✅ Complete Feature Set
 
 - **Server Connection Management** - Save and manage Mumble AI server URL
+- **Multi-User Support** - User selection screen for managing multiple users
 - **AI Chat Interface** - Direct chat with Ollama AI
-- **Dashboard** - Statistics and upcoming events overview
+- **Dashboard** - Statistics and upcoming events overview with real-time updates
 - **Ollama Configuration** - Model and URL management for AI models
 - **Conversation History** - View and manage conversation logs
-- **Persistent Memories** - CRUD operations for AI memories
+- **Persistent Memories** - CRUD operations for AI memories with filtering
 - **Schedule Manager** - Full calendar and event management
 - **Email Settings** - Complete SMTP, IMAP, and auto-reply configuration
 - **Email Logs** - View email history with filtering and retry functionality
@@ -19,10 +22,11 @@ A comprehensive Flutter Android application for managing and controlling the Mum
 - **Persona Management** - Edit and enhance bot persona with AI assistance
 - **Advanced Settings** - Fine-tune AI behavior and memory limits
 - **Whisper Language Config** - Speech recognition language settings
+- **Comprehensive Logging** - Auto-sync logs to server for debugging
+- **Enhanced Error Handling** - Crash reporting and error recovery
 - **Audio Playback** - Preview voices before selection
 - **Navigation Drawer** - Complete menu system with all features
 - **Material Design** - Modern, intuitive UI with consistent theming
-- **Error Handling** - Comprehensive error handling and user feedback
 - **Loading States** - Loading indicators and skeleton screens
 - **Form Validation** - Input validation and user guidance
 
@@ -34,12 +38,13 @@ A comprehensive Flutter Android application for managing and controlling the Mum
 - Mumble AI server running and accessible
 - Network connection to the Mumble AI server
 
-### APK Installation
+### APK Installation (Beta Version)
 
 1. Download the latest APK from the `build/app/outputs/flutter-apk/` directory
 2. Enable "Install from unknown sources" in your Android device settings
 3. Install the APK file
 4. Launch the app
+5. **Note**: This is a beta version - report any issues or bugs you encounter
 
 ### Development Setup
 
@@ -67,7 +72,18 @@ flutter build apk --release
 1. **Launch the app** - You'll see the server connection screen
 2. **Enter server URL** - Input your Mumble AI server address (e.g., `http://192.168.1.100:5002`)
 3. **Test connection** - Tap "Connect" to verify the server is reachable
-4. **Start using** - You'll be taken to the dashboard
+4. **Select user** - Choose from available users or create a new one
+5. **Start using** - You'll be taken to the dashboard
+
+### Beta Testing
+
+**We're seeking beta testers!** Please help us improve the app by:
+
+- **Testing all features** - Try every screen and function
+- **Reporting bugs** - Use GitHub/Gitea issues to report problems
+- **Providing feedback** - Share your experience and suggestions
+- **Performance testing** - Test on different devices and network conditions
+- **Log monitoring** - Check the web control panel `/logs` page to view app logs
 
 ### Main Features
 
@@ -304,7 +320,39 @@ For issues and support:
 3. Test with web control panel
 4. Create an issue with detailed information
 
+## Logging System
+
+The app includes a comprehensive logging system that automatically syncs logs to the server:
+
+### Features
+- **Automatic Logging**: All user actions, API calls, and errors are logged
+- **Auto-Sync**: Logs are automatically sent to the server every 50 entries
+- **Server-Side Viewing**: View logs in real-time at `http://your-server:5002/logs`
+- **Filtering**: Filter logs by level (DEBUG, INFO, WARNING, ERROR) and screen
+- **Crash Reporting**: Automatic crash detection and reporting
+- **Debug Information**: Detailed context for troubleshooting
+
+### Log Levels
+- **DEBUG**: Detailed debugging information
+- **INFO**: General information about app operation
+- **WARNING**: Warning messages for potential issues
+- **ERROR**: Error messages for failures and exceptions
+
+### Viewing Logs
+1. Open the web control panel at `http://your-server:5002`
+2. Navigate to the `/logs` page
+3. Use filters to find specific logs
+4. Enable auto-refresh for real-time monitoring
+
 ## Changelog
+
+### Version 1.1.0 Beta (January 15, 2025)
+- **Multi-User Support**: User selection screen for managing multiple users
+- **Comprehensive Logging**: Auto-sync logs to server with web-based viewing
+- **Enhanced Error Handling**: Improved crash reporting and error recovery
+- **Real-Time Updates**: Better data synchronization across all screens
+- **Performance Improvements**: Optimized API calls and UI rendering
+- **Beta Testing Phase**: Ready for user feedback and testing
 
 ### Version 1.0.0 - Complete Release
 - **Core Features**: Server connection management, AI chat interface, dashboard

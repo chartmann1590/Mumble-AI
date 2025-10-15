@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../widgets/loading_indicator.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
@@ -57,6 +58,11 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('EmailSettingsScreen', 'initState');
+    
     _loadEmailSettings();
   }
 
@@ -87,6 +93,8 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
       final response = await apiService.get(AppConstants.emailSettingsEndpoint);
       final data = response.data;
 
@@ -122,7 +130,12 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
 
         _isLoading = false;
       });
-    } catch (e) {
+      
+      loggingService.info('Email settings loaded successfully', screen: 'EmailSettingsScreen');
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'EmailSettingsScreen');
+      
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load email settings: ${e.toString()}';
@@ -139,6 +152,14 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Save Email Settings', screen: 'EmailSettingsScreen', data: {
+        'dailySummaryEnabled': _dailySummaryEnabled,
+        'imapEnabled': _imapEnabled,
+        'autoReplyEnabled': _autoReplyEnabled,
+      });
+      
       await apiService.post(AppConstants.emailSettingsEndpoint, data: {
         // SMTP Configuration
         'smtp_host': _smtpHostController.text.trim(),
@@ -170,6 +191,8 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
         'reply_signature': _replySignatureController.text.trim(),
       });
 
+      loggingService.info('Email settings saved successfully', screen: 'EmailSettingsScreen');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -178,7 +201,10 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'EmailSettingsScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -201,7 +227,13 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Test Email', screen: 'EmailSettingsScreen');
+      
       await apiService.post(AppConstants.testEmailEndpoint, data: {});
+
+      loggingService.info('Test email sent successfully', screen: 'EmailSettingsScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -211,7 +243,10 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'EmailSettingsScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -234,11 +269,17 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      
+      loggingService.logUserAction('Generate Email Signature', screen: 'EmailSettingsScreen');
+      
       final response = await apiService.post(AppConstants.generateSignatureEndpoint, data: {});
       
       setState(() {
         _replySignatureController.text = response.data['signature'] ?? '';
       });
+
+      loggingService.info('Signature generated successfully', screen: 'EmailSettingsScreen');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -248,7 +289,10 @@ class _EmailSettingsScreenState extends State<EmailSettingsScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final loggingService = Provider.of<LoggingService>(context, listen: false);
+      loggingService.logException(e, stackTrace, screen: 'EmailSettingsScreen');
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

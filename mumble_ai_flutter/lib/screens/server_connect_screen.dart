@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/storage_service.dart';
 import '../services/api_service.dart';
+import '../services/logging_service.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
 
@@ -24,6 +25,11 @@ class _ServerConnectScreenState extends State<ServerConnectScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Log screen entry
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    loggingService.logScreenLifecycle('ServerConnectScreen', 'initState');
+    
     _loadSavedSettings();
   }
 
@@ -109,6 +115,14 @@ class _ServerConnectScreenState extends State<ServerConnectScreen> {
   Future<void> _connect() async {
     if (!_formKey.currentState!.validate()) return;
 
+    final loggingService = Provider.of<LoggingService>(context, listen: false);
+    final startTime = DateTime.now();
+    
+    loggingService.logUserAction('Connect to Server', screen: 'ServerConnectScreen', data: {
+      'url': _urlController.text.trim(),
+      'rememberServer': _rememberServer,
+    });
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -125,6 +139,10 @@ class _ServerConnectScreenState extends State<ServerConnectScreen> {
       final isConnected = await apiService.testConnection();
       
       if (!isConnected) {
+        loggingService.warning('Connection test failed', screen: 'ServerConnectScreen', data: {
+          'url': url,
+        });
+        
         setState(() {
           _errorMessage = 'Connection failed. Please check the server URL and ensure the server is running.';
         });
@@ -140,11 +158,23 @@ class _ServerConnectScreenState extends State<ServerConnectScreen> {
         await storageService.setRememberServer(false);
       }
       
-      // Navigate to dashboard
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Server Connection', duration, screen: 'ServerConnectScreen');
+      loggingService.info('Successfully connected to server', screen: 'ServerConnectScreen', data: {
+        'url': url,
+        'rememberServer': _rememberServer,
+      });
+      
+      // Navigate to user selection
       if (mounted) {
-        Navigator.pushReplacementNamed(context, '/dashboard');
+        loggingService.logNavigation('ServerConnectScreen', 'UserSelectionScreen');
+        Navigator.pushReplacementNamed(context, '/user-selection');
       }
     } catch (e) {
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Server Connection (ERROR)', duration, screen: 'ServerConnectScreen');
+      loggingService.logException(e, null, screen: 'ServerConnectScreen');
+      
       setState(() {
         _errorMessage = 'Connection error: ${e.toString()}';
       });
@@ -345,7 +375,9 @@ class _ServerConnectScreenState extends State<ServerConnectScreen> {
                               const SizedBox(height: AppTheme.spacingS),
                               TextButton.icon(
                                 onPressed: () async {
-                                  const url = 'http://localhost:5002';
+                                  final url = _urlController.text.trim().isNotEmpty 
+                                      ? _urlController.text.trim() 
+                                      : 'http://localhost:5002';
                                   if (await canLaunchUrl(Uri.parse(url))) {
                                     await launchUrl(Uri.parse(url));
                                   }

@@ -299,6 +299,44 @@ def reset_conversations():
 
     return jsonify({'success': True, 'deleted': deleted_count})
 
+@app.route('/api/conversations/ai_chat', methods=['POST'])
+def log_ai_chat():
+    try:
+        data = request.get_json()
+        user_message = data.get('user_message')
+        ai_response = data.get('ai_response')
+        timestamp = data.get('timestamp')
+        
+        if not user_message or not ai_response:
+            return jsonify({'error': 'Missing user_message or ai_response'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Insert user message
+        cursor.execute("""
+            INSERT INTO conversation_history (user_name, message_type, role, message, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+        """, ('Flutter App', 'ai_chat', 'user', user_message, timestamp))
+        
+        # Insert AI response
+        cursor.execute("""
+            INSERT INTO conversation_history (user_name, message_type, role, message, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+        """, ('AI Assistant', 'ai_chat', 'assistant', ai_response, timestamp))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"AI Chat logged - User: {user_message[:50]}... AI: {ai_response[:50]}...")
+        
+        return jsonify({'success': True, 'logged_messages': 2})
+        
+    except Exception as e:
+        print(f"Error logging AI chat: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # Voice metadata mapping
 VOICE_METADATA = {
     # English - US
@@ -611,13 +649,18 @@ def set_tts_engine():
 def get_silero_voices():
     """Get available Silero voices from the Silero service"""
     try:
-        response = requests.get('http://silero-tts:5004/voices', timeout=5)
+        response = requests.get('http://silero-tts:5004/voices', timeout=10)
         if response.status_code == 200:
             return jsonify(response.json())
         else:
-            return jsonify({'error': 'Failed to fetch voices'}), 500
+            return jsonify({'voices': [], 'error': 'Silero service unavailable'}), 200
+    except requests.exceptions.ConnectionError:
+        # Service not available - return empty list instead of error
+        return jsonify({'voices': [], 'error': 'Silero service not running'}), 200
+    except requests.exceptions.Timeout:
+        return jsonify({'voices': [], 'error': 'Silero service timeout'}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'voices': [], 'error': str(e)}), 200
 
 @app.route('/api/silero/current', methods=['GET'])
 def get_current_silero_voice():
@@ -705,7 +748,8 @@ def get_chatterbox_voices():
 
         return jsonify({'voices': voices})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Return empty list on error so app doesn't crash
+        return jsonify({'voices': [], 'error': str(e)}), 200
 
 @app.route('/api/chatterbox/current', methods=['GET'])
 def get_current_chatterbox_voice():
@@ -817,45 +861,50 @@ def get_stats():
 @app.route('/api/memories', methods=['GET'])
 def get_memories():
     """Get all persistent memories, optionally filtered by user"""
-    user_name = request.args.get('user')
-    category = request.args.get('category')
+    try:
+        user_name = request.args.get('user')
+        category = request.args.get('category')
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    query = """
-        SELECT id, user_name, category, content, extracted_at, importance, tags, active
-        FROM persistent_memories
-        WHERE active = TRUE
-    """
-    params = []
+        query = """
+            SELECT id, user_name, category, content, extracted_at, importance, tags, active
+            FROM persistent_memories
+            WHERE active = TRUE
+        """
+        params = []
 
-    if user_name:
-        query += " AND user_name = %s"
-        params.append(user_name)
+        if user_name:
+            query += " AND user_name = %s"
+            params.append(user_name)
 
-    if category:
-        query += " AND category = %s"
-        params.append(category)
+        if category:
+            query += " AND category = %s"
+            params.append(category)
 
-    query += " ORDER BY importance DESC, extracted_at DESC"
+        query += " ORDER BY importance DESC, extracted_at DESC"
 
-    cursor.execute(query, params)
-    memories = cursor.fetchall()
+        cursor.execute(query, params)
+        memories = cursor.fetchall()
 
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
 
-    return jsonify([{
-        'id': m[0],
-        'user_name': m[1],
-        'category': m[2],
-        'content': m[3],
-        'extracted_at': format_timestamp_ny(m[4]) if m[4] else None,
-        'importance': m[5],
-        'tags': m[6] or [],
-        'active': m[7]
-    } for m in memories])
+        return jsonify([{
+            'id': m[0],
+            'user_name': m[1],
+            'category': m[2],
+            'content': m[3],
+            'extracted_at': format_timestamp_ny(m[4]) if m[4] else None,
+            'importance': m[5],
+            'tags': m[6] or [],
+            'active': m[7]
+        } for m in memories])
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/memories', methods=['POST'])
 def add_memory():
@@ -961,7 +1010,7 @@ def get_users():
     cursor.close()
     conn.close()
 
-    return jsonify(users)
+    return jsonify({'users': users})
 
 # Email Settings API
 @app.route('/api/email/settings', methods=['GET'])
@@ -1673,45 +1722,50 @@ def retry_failed_email(log_id):
 @app.route('/api/schedule', methods=['GET'])
 def get_schedule():
     """Get all schedule events, optionally filtered by user"""
-    user_name = request.args.get('user')
+    try:
+        user_name = request.args.get('user')
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    query = """
-        SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
-               reminder_enabled, reminder_minutes, recipient_email, reminder_sent
-        FROM schedule_events
-        WHERE active = TRUE
-    """
-    params = []
+        query = """
+            SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
+                   reminder_enabled, reminder_minutes, recipient_email, reminder_sent
+            FROM schedule_events
+            WHERE active = TRUE
+        """
+        params = []
 
-    if user_name:
-        query += " AND user_name = %s"
-        params.append(user_name)
+        if user_name:
+            query += " AND user_name = %s"
+            params.append(user_name)
 
-    query += " ORDER BY event_date, event_time"
+        query += " ORDER BY event_date, event_time"
 
-    cursor.execute(query, params)
-    events = cursor.fetchall()
+        cursor.execute(query, params)
+        events = cursor.fetchall()
 
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
 
-    return jsonify([{
-        'id': e[0],
-        'user_name': e[1],
-        'title': e[2],
-        'event_date': e[3].isoformat() if e[3] else None,
-        'event_time': str(e[4]) if e[4] else None,
-        'description': e[5],
-        'importance': e[6],
-        'created_at': format_timestamp_ny(e[7]) if e[7] else None,
-        'reminder_enabled': e[8] if len(e) > 8 else False,
-        'reminder_minutes': e[9] if len(e) > 9 else 60,
-        'recipient_email': e[10] if len(e) > 10 else None,
-        'reminder_sent': e[11] if len(e) > 11 else False
-    } for e in events])
+        return jsonify([{
+            'id': e[0],
+            'user_name': e[1],
+            'title': e[2],
+            'event_date': e[3].isoformat() if e[3] else None,
+            'event_time': str(e[4]) if e[4] else None,
+            'description': e[5],
+            'importance': e[6],
+            'created_at': format_timestamp_ny(e[7]) if e[7] else None,
+            'reminder_enabled': e[8] if len(e) > 8 else False,
+            'reminder_minutes': e[9] if len(e) > 9 else 60,
+            'recipient_email': e[10] if len(e) > 10 else None,
+            'reminder_sent': e[11] if len(e) > 11 else False
+        } for e in events])
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/schedule', methods=['POST'])
 def add_schedule_event():
@@ -1962,7 +2016,139 @@ def init_voices():
     else:
         print(f"Found {len(onnx_files)} voices, skipping download")
 
+# Initialize logs table
+def init_logs_table():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS flutter_logs (
+            id SERIAL PRIMARY KEY,
+            timestamp TIMESTAMP NOT NULL,
+            level VARCHAR(20) NOT NULL,
+            message TEXT NOT NULL,
+            screen VARCHAR(100),
+            data JSONB,
+            device_info JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Logs endpoint for receiving logs from Flutter app
+@app.route('/api/logs', methods=['POST'])
+def receive_logs():
+    try:
+        data = request.get_json()
+        logs = data.get('logs', [])
+        device_info = data.get('device_info', {})
+        
+        print(f"Received {len(logs)} logs from Flutter app")
+        print(f"Device info: {device_info}")
+        
+        # Store logs in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        for log_entry in logs:
+            timestamp = log_entry.get('timestamp', '')
+            level = log_entry.get('level', 'INFO')
+            message = log_entry.get('message', '')
+            screen = log_entry.get('screen', '')
+            log_data = log_entry.get('data', {})
+            
+            # Parse timestamp
+            try:
+                parsed_timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            except:
+                parsed_timestamp = datetime.now()
+            
+            # Insert into database
+            cursor.execute("""
+                INSERT INTO flutter_logs (timestamp, level, message, screen, data, device_info)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (parsed_timestamp, level, message, screen, json.dumps(log_data), json.dumps(device_info)))
+            
+            # Also print to console
+            screen_prefix = f"[{screen}] " if screen else ""
+            print(f"[FLUTTER] {timestamp} [{level}] {screen_prefix}{message}")
+            
+            if log_data:
+                print(f"[FLUTTER] Data: {log_data}")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'success': True, 'received_logs': len(logs)})
+    except Exception as e:
+        print(f"Error processing logs: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Get logs endpoint
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get query parameters
+        limit = request.args.get('limit', 100, type=int)
+        level = request.args.get('level')
+        screen = request.args.get('screen')
+        
+        # Build query
+        query = "SELECT * FROM flutter_logs"
+        params = []
+        conditions = []
+        
+        if level:
+            conditions.append("level = %s")
+            params.append(level)
+        
+        if screen:
+            conditions.append("screen = %s")
+            params.append(screen)
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        
+        query += " ORDER BY timestamp DESC LIMIT %s"
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        logs = cursor.fetchall()
+        
+        # Convert to list of dictionaries
+        log_list = []
+        for log in logs:
+            log_list.append({
+                'id': log[0],
+                'timestamp': log[1].isoformat() if log[1] else None,
+                'level': log[2],
+                'message': log[3],
+                'screen': log[4],
+                'data': log[5] if log[5] else {},
+                'device_info': log[6] if log[6] else {},
+                'created_at': log[7].isoformat() if log[7] else None,
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'logs': log_list, 'count': len(log_list)})
+    except Exception as e:
+        print(f"Error retrieving logs: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Logs web page
+@app.route('/logs')
+def logs_page():
+    return render_template('logs.html')
+
 if __name__ == '__main__':
     init_config_table()
+    init_logs_table()
     init_voices()
     app.run(host='0.0.0.0', port=5002, debug=False)
