@@ -1701,10 +1701,10 @@
                 
                 document.getElementById('short-term-limit').value = data.short_term_memory_limit || 10;
                 document.getElementById('long-term-limit').value = data.long_term_memory_limit || 10;
-                document.getElementById('use-chain-of-thought').checked = data.use_chain_of_thought === 'true';
-                document.getElementById('use-semantic-ranking').checked = data.use_semantic_memory_ranking === 'true';
-                document.getElementById('use-response-validation').checked = data.use_response_validation === 'true';
-                document.getElementById('enable-parallel-processing').checked = data.enable_parallel_processing === 'true';
+                document.getElementById('use-chain-of-thought').checked = data.use_chain_of_thought === true || data.use_chain_of_thought === 'true';
+                document.getElementById('use-semantic-ranking').checked = data.use_semantic_memory_ranking === true || data.use_semantic_memory_ranking === 'true';
+                document.getElementById('use-response-validation').checked = data.use_response_validation === true || data.use_response_validation === 'true';
+                document.getElementById('enable-parallel-processing').checked = data.enable_parallel_processing === true || data.enable_parallel_processing === 'true';
             } catch (error) {
                 console.error('Error loading advanced settings:', error);
             }

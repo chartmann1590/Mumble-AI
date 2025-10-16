@@ -27,6 +27,14 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
   bool _useResponseValidation = false;
   bool _enableParallelProcessing = false;
 
+  // Helper method to safely parse boolean values
+  bool _parseBool(dynamic value, bool defaultValue) {
+    if (value == null) return defaultValue;
+    if (value is bool) return value;
+    if (value is String) return value.toLowerCase() == 'true';
+    return defaultValue;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -59,12 +67,16 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
       final data = response.data;
 
       setState(() {
-        _shortTermMemoryController.text = data['short_term_memory_limit']?.toString() ?? '10';
-        _longTermMemoryController.text = data['long_term_memory_limit']?.toString() ?? '100';
-        _useChainOfThought = data['use_chain_of_thought'] ?? false;
-        _useSemanticMemoryRanking = data['use_semantic_memory_ranking'] ?? false;
-        _useResponseValidation = data['use_response_validation'] ?? false;
-        _enableParallelProcessing = data['enable_parallel_processing'] ?? false;
+        _shortTermMemoryController.text = (data['short_term_memory_limit'] is int 
+            ? data['short_term_memory_limit'] 
+            : int.tryParse(data['short_term_memory_limit']?.toString() ?? '10') ?? 10).toString();
+        _longTermMemoryController.text = (data['long_term_memory_limit'] is int 
+            ? data['long_term_memory_limit'] 
+            : int.tryParse(data['long_term_memory_limit']?.toString() ?? '100') ?? 100).toString();
+        _useChainOfThought = _parseBool(data['use_chain_of_thought'], false);
+        _useSemanticMemoryRanking = _parseBool(data['use_semantic_memory_ranking'], false);
+        _useResponseValidation = _parseBool(data['use_response_validation'], false);
+        _enableParallelProcessing = _parseBool(data['enable_parallel_processing'], false);
         _isLoading = false;
       });
       

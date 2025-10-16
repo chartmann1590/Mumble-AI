@@ -2151,7 +2151,13 @@ def get_advanced_settings():
     for key in setting_keys:
         cursor.execute("SELECT value FROM bot_config WHERE key = %s", (key,))
         result = cursor.fetchone()
-        settings[key] = result[0] if result else ('10' if 'limit' in key else 'true')
+        value = result[0] if result else ('10' if 'limit' in key else 'true')
+        
+        # Convert to appropriate type
+        if 'limit' in key:
+            settings[key] = int(value)
+        else:
+            settings[key] = value.lower() in ('true', '1', 'yes')
     
     cursor.close()
     conn.close()
