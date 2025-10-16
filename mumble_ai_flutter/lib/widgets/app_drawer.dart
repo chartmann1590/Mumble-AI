@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../utils/theme.dart';
 import '../utils/constants.dart';
+import '../services/storage_service.dart';
+import '../services/session_service.dart';
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({Key? key}) : super(key: key);
@@ -21,41 +24,158 @@ class AppDrawer extends StatelessWidget {
   }
 
   Widget _buildHeader(BuildContext context) {
-    return DrawerHeader(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppTheme.primaryColor, AppTheme.secondaryColor],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          const Icon(
-            Icons.psychology,
-            size: 48,
-            color: Colors.white,
-          ),
-          const SizedBox(height: AppTheme.spacingS),
-          Text(
-            AppConstants.appName,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _getUserAndSessionInfo(),
+      builder: (context, snapshot) {
+        final userInfo = snapshot.data ?? {};
+        final currentUser = userInfo['user'] as String?;
+        final sessionInfo = userInfo['session'] as Map<String, dynamic>?;
+        
+        return DrawerHeader(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppTheme.primaryColor, AppTheme.secondaryColor],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
           ),
-          const SizedBox(height: AppTheme.spacingXS),
-          Text(
-            'AI Control Panel',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Colors.white70,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.psychology,
+                    size: 48,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: AppTheme.spacingM),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          AppConstants.appName,
+                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: AppTheme.spacingXS),
+                        Text(
+                          'AI Control Panel',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppTheme.spacingM),
+              if (currentUser != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppTheme.spacingM,
+                    vertical: AppTheme.spacingS,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.person,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                      const SizedBox(width: AppTheme.spacingS),
+                      Text(
+                        'User: $currentUser',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (sessionInfo != null && sessionInfo['session_id'] != null) ...[
+                  const SizedBox(height: AppTheme.spacingS),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppTheme.spacingM,
+                      vertical: AppTheme.spacingS,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.chat,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                        const SizedBox(width: AppTheme.spacingS),
+                        Expanded(
+                          child: Text(
+                            'Session: ${(sessionInfo['session_id'] as String).substring(0, 8)}...',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        if (sessionInfo['message_count'] != null && sessionInfo['message_count'] > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: AppTheme.spacingS,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(AppTheme.radiusS),
+                            ),
+                            child: Text(
+                              '${sessionInfo['message_count']} msgs',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Colors.white,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Future<Map<String, dynamic>> _getUserAndSessionInfo() async {
+    try {
+      final storageService = await StorageService.getInstance();
+      final sessionService = await SessionService.getInstance();
+      
+      final currentUser = await storageService.getSelectedUser();
+      final sessionMetadata = sessionService.getSessionMetadata();
+      
+      return {
+        'user': currentUser,
+        'session': sessionMetadata,
+      };
+    } catch (e) {
+      return {};
+    }
   }
 
   Widget _buildMenuItems(BuildContext context) {
@@ -221,6 +341,22 @@ class AppDrawer extends StatelessWidget {
             onTap: () {
               Navigator.pop(context); // Close drawer
               Navigator.pushNamed(context, '/connect');
+            },
+          ),
+          ListTile(
+            leading: const Icon(
+              Icons.swap_horiz,
+              color: AppTheme.textSecondary,
+            ),
+            title: Text(
+              'Switch User',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            onTap: () {
+              Navigator.pop(context); // Close drawer
+              Navigator.pushReplacementNamed(context, '/user-selection');
             },
           ),
         ],

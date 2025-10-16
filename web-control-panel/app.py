@@ -5,6 +5,7 @@ import requests
 import json
 import subprocess
 import pytz
+import uuid
 from datetime import datetime
 
 app = Flask(__name__)
@@ -857,41 +858,70 @@ def get_stats():
         'text_messages': text_messages
     })
 
-# Persistent Memories API
+# Enhanced Memory APIs for Flutter
 @app.route('/api/memories', methods=['GET'])
 def get_memories():
-    """Get all persistent memories, optionally filtered by user"""
+    """Get persistent memories with enhanced filtering for mobile"""
     try:
-        user_name = request.args.get('user')
+        # Get query parameters
+        user_name = request.args.get('user_name')  # Required for Flutter
         category = request.args.get('category')
+        importance = request.args.get('importance', type=int)
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Validate required parameters
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
 
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # Build query with filters
         query = """
-            SELECT id, user_name, category, content, extracted_at, importance, tags, active
+            SELECT id, user_name, category, content, extracted_at, importance, tags, active, event_date, event_time
             FROM persistent_memories
-            WHERE active = TRUE
+            WHERE active = TRUE AND user_name = %s
         """
-        params = []
-
-        if user_name:
-            query += " AND user_name = %s"
-            params.append(user_name)
+        params = [user_name]
 
         if category:
             query += " AND category = %s"
             params.append(category)
 
+        if importance is not None:
+            query += " AND importance >= %s"
+            params.append(importance)
+
         query += " ORDER BY importance DESC, extracted_at DESC"
+        query += " LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
 
         cursor.execute(query, params)
         memories = cursor.fetchall()
 
+        # Get total count for pagination
+        count_query = """
+            SELECT COUNT(*) FROM persistent_memories
+            WHERE active = TRUE AND user_name = %s
+        """
+        count_params = [user_name]
+        
+        if category:
+            count_query += " AND category = %s"
+            count_params.append(category)
+            
+        if importance is not None:
+            count_query += " AND importance >= %s"
+            count_params.append(importance)
+            
+        cursor.execute(count_query, count_params)
+        total_count = cursor.fetchone()[0]
+
         cursor.close()
         conn.close()
 
-        return jsonify([{
+        memories_data = [{
             'id': m[0],
             'user_name': m[1],
             'category': m[2],
@@ -899,98 +929,177 @@ def get_memories():
             'extracted_at': format_timestamp_ny(m[4]) if m[4] else None,
             'importance': m[5],
             'tags': m[6] or [],
-            'active': m[7]
-        } for m in memories])
+            'active': m[7],
+            'event_date': m[8].isoformat() if m[8] else None,
+            'event_time': str(m[9]) if m[9] else None
+        } for m in memories]
+
+        return create_success_response({
+            'memories': memories_data,
+            'pagination': {
+                'total': total_count,
+                'limit': limit,
+                'offset': offset,
+                'has_more': offset + limit < total_count
+            }
+        })
+        
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return create_error_response('DATABASE_ERROR', 'Failed to retrieve memories', str(e)), 500
+
+@app.route('/api/memories/categories', methods=['GET'])
+def get_memory_categories():
+    """Get available memory categories"""
+    return create_success_response({
+        'categories': ['schedule', 'fact', 'preference', 'task', 'reminder', 'other']
+    })
 
 @app.route('/api/memories', methods=['POST'])
 def add_memory():
     """Manually add a persistent memory"""
-    data = request.json
+    try:
+        data = request.get_json()
+        if not data:
+            return create_error_response('INVALID_FORMAT', 'Request body must be JSON'), 400
+        
+        # Validate required fields
+        user_name = data.get('user_name')
+        content = data.get('content')
+        
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
+        if not content:
+            return create_error_response('MISSING_PARAMETER', 'content is required'), 400
+        
+        # Validate category
+        category = data.get('category', 'other')
+        valid_categories = ['schedule', 'fact', 'preference', 'task', 'reminder', 'other']
+        if category not in valid_categories:
+            return create_error_response('INVALID_FORMAT', f'category must be one of: {valid_categories}'), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        INSERT INTO persistent_memories (user_name, category, content, importance, tags)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id
-    """, (
-        data.get('user_name'),
-        data.get('category', 'other'),
-        data.get('content'),
-        data.get('importance', 5),
-        data.get('tags', [])
-    ))
+        cursor.execute("""
+            INSERT INTO persistent_memories (user_name, category, content, importance, tags, event_date, event_time)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            user_name,
+            category,
+            content,
+            data.get('importance', 5),
+            data.get('tags', []),
+            data.get('event_date'),
+            data.get('event_time')
+        ))
 
-    memory_id = cursor.fetchone()[0]
-    conn.commit()
-    cursor.close()
-    conn.close()
+        memory_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-    return jsonify({'id': memory_id, 'status': 'created'})
+        return create_success_response({
+            'id': memory_id,
+            'status': 'created'
+        })
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to create memory', str(e)), 500
 
 @app.route('/api/memories/<int:memory_id>', methods=['DELETE'])
 def delete_memory(memory_id):
     """Delete (deactivate) a memory"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE persistent_memories
-        SET active = FALSE
-        WHERE id = %s
-    """, (memory_id,))
+        cursor.execute("""
+            UPDATE persistent_memories
+            SET active = FALSE
+            WHERE id = %s
+        """, (memory_id,))
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            return create_error_response('NOT_FOUND', 'Memory not found'), 404
 
-    return jsonify({'status': 'deleted'})
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return create_success_response({'status': 'deleted'})
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to delete memory', str(e)), 500
 
 @app.route('/api/memories/<int:memory_id>', methods=['PUT'])
 def update_memory(memory_id):
     """Update a memory"""
-    data = request.json
+    try:
+        data = request.get_json()
+        if not data:
+            return create_error_response('INVALID_FORMAT', 'Request body must be JSON'), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # Build update query dynamically based on provided fields
-    updates = []
-    params = []
+        # Build update query dynamically based on provided fields
+        updates = []
+        params = []
 
-    if 'content' in data:
-        updates.append("content = %s")
-        params.append(data['content'])
+        if 'content' in data:
+            updates.append("content = %s")
+            params.append(data['content'])
 
-    if 'category' in data:
-        updates.append("category = %s")
-        params.append(data['category'])
+        if 'category' in data:
+            # Validate category
+            valid_categories = ['schedule', 'fact', 'preference', 'task', 'reminder', 'other']
+            if data['category'] not in valid_categories:
+                cursor.close()
+                conn.close()
+                return create_error_response('INVALID_FORMAT', f'category must be one of: {valid_categories}'), 400
+            updates.append("category = %s")
+            params.append(data['category'])
 
-    if 'importance' in data:
-        updates.append("importance = %s")
-        params.append(data['importance'])
+        if 'importance' in data:
+            updates.append("importance = %s")
+            params.append(data['importance'])
 
-    if 'tags' in data:
-        updates.append("tags = %s")
-        params.append(data['tags'])
+        if 'tags' in data:
+            updates.append("tags = %s")
+            params.append(data['tags'])
+            
+        if 'event_date' in data:
+            updates.append("event_date = %s")
+            params.append(data['event_date'])
+            
+        if 'event_time' in data:
+            updates.append("event_time = %s")
+            params.append(data['event_time'])
 
-    if updates:
-        updates.append("updated_at = CURRENT_TIMESTAMP")
-        params.append(memory_id)
+        if updates:
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(memory_id)
 
-        query = f"UPDATE persistent_memories SET {', '.join(updates)} WHERE id = %s"
-        cursor.execute(query, params)
-        conn.commit()
+            query = f"UPDATE persistent_memories SET {', '.join(updates)} WHERE id = %s"
+            cursor.execute(query, params)
+            
+            if cursor.rowcount == 0:
+                cursor.close()
+                conn.close()
+                return create_error_response('NOT_FOUND', 'Memory not found'), 404
+                
+            conn.commit()
 
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
 
-    return jsonify({'status': 'updated'})
+        return create_success_response({'status': 'updated'})
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to update memory', str(e)), 500
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
@@ -1718,37 +1827,80 @@ def retry_failed_email(log_id):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-# Schedule API
+# Enhanced Schedule APIs for Flutter
 @app.route('/api/schedule', methods=['GET'])
 def get_schedule():
-    """Get all schedule events, optionally filtered by user"""
+    """Get schedule events with enhanced filtering for mobile"""
     try:
-        user_name = request.args.get('user')
+        # Get query parameters
+        user_name = request.args.get('user_name')  # Required for Flutter
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        upcoming = request.args.get('upcoming', type=int)  # Next N days
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Validate required parameters
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
 
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # Build query with filters
         query = """
             SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
                    reminder_enabled, reminder_minutes, recipient_email, reminder_sent
             FROM schedule_events
-            WHERE active = TRUE
+            WHERE active = TRUE AND user_name = %s
         """
-        params = []
+        params = [user_name]
 
-        if user_name:
-            query += " AND user_name = %s"
-            params.append(user_name)
+        if start_date:
+            query += " AND event_date >= %s"
+            params.append(start_date)
+
+        if end_date:
+            query += " AND event_date <= %s"
+            params.append(end_date)
+            
+        if upcoming:
+            query += " AND event_date >= CURRENT_DATE AND event_date <= CURRENT_DATE + INTERVAL '%s days'"
+            params.append(upcoming)
 
         query += " ORDER BY event_date, event_time"
+        query += " LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
 
         cursor.execute(query, params)
         events = cursor.fetchall()
 
+        # Get total count for pagination
+        count_query = """
+            SELECT COUNT(*) FROM schedule_events
+            WHERE active = TRUE AND user_name = %s
+        """
+        count_params = [user_name]
+        
+        if start_date:
+            count_query += " AND event_date >= %s"
+            count_params.append(start_date)
+            
+        if end_date:
+            count_query += " AND event_date <= %s"
+            count_params.append(end_date)
+            
+        if upcoming:
+            count_query += " AND event_date >= CURRENT_DATE AND event_date <= CURRENT_DATE + INTERVAL '%s days'"
+            count_params.append(upcoming)
+            
+        cursor.execute(count_query, count_params)
+        total_count = cursor.fetchone()[0]
+
         cursor.close()
         conn.close()
 
-        return jsonify([{
+        events_data = [{
             'id': e[0],
             'user_name': e[1],
             'title': e[2],
@@ -1761,43 +1913,70 @@ def get_schedule():
             'reminder_minutes': e[9] if len(e) > 9 else 60,
             'recipient_email': e[10] if len(e) > 10 else None,
             'reminder_sent': e[11] if len(e) > 11 else False
-        } for e in events])
+        } for e in events]
+
+        return create_success_response({
+            'events': events_data,
+            'pagination': {
+                'total': total_count,
+                'limit': limit,
+                'offset': offset,
+                'has_more': offset + limit < total_count
+            }
+        })
+        
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return create_error_response('DATABASE_ERROR', 'Failed to retrieve schedule events', str(e)), 500
 
 @app.route('/api/schedule', methods=['POST'])
 def add_schedule_event():
     """Add a new schedule event"""
-    data = request.json
+    try:
+        data = request.get_json()
+        if not data:
+            return create_error_response('INVALID_FORMAT', 'Request body must be JSON'), 400
+        
+        # Validate required fields
+        user_name = data.get('user_name')
+        title = data.get('title')
+        event_date = data.get('event_date')
+        
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
+        if not title:
+            return create_error_response('MISSING_PARAMETER', 'title is required'), 400
+        if not event_date:
+            return create_error_response('MISSING_PARAMETER', 'event_date is required'), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance, 
-                                     reminder_enabled, reminder_minutes, recipient_email)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-    """, (
-        data.get('user_name'),
-        data.get('title'),
-        data.get('event_date'),
-        data.get('event_time'),
-        data.get('description'),
-        data.get('importance', 5),
-        data.get('reminder_enabled', False),
-        data.get('reminder_minutes', 60),
-        data.get('recipient_email')
-    ))
+        cursor.execute("""
+            INSERT INTO schedule_events (user_name, title, event_date, event_time, description, importance, 
+                                         reminder_enabled, reminder_minutes, recipient_email)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            user_name,
+            title,
+            event_date,
+            data.get('event_time'),
+            data.get('description'),
+            data.get('importance', 5),
+            data.get('reminder_enabled', False),
+            data.get('reminder_minutes', 60),
+            data.get('recipient_email')
+        ))
 
-    event_id = cursor.fetchone()[0]
-    conn.commit()
-    cursor.close()
-    conn.close()
+        event_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-    return jsonify({'id': event_id, 'status': 'created'})
+        return create_success_response({'id': event_id, 'status': 'created'})
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to create schedule event', str(e)), 500
 
 @app.route('/api/schedule/<int:event_id>', methods=['PUT'])
 def update_schedule_event(event_id):
@@ -2146,6 +2325,488 @@ def get_logs():
 @app.route('/logs')
 def logs_page():
     return render_template('logs.html')
+
+# =============================================================================
+# FLUTTER API ENDPOINTS
+# =============================================================================
+
+def create_error_response(error_code, message, details=None):
+    """Create standardized error response"""
+    return jsonify({
+        'success': False,
+        'error': {
+            'code': error_code,
+            'message': message,
+            'details': details
+        },
+        'timestamp': datetime.now().isoformat()
+    })
+
+def create_success_response(data=None):
+    """Create standardized success response"""
+    response = {
+        'success': True,
+        'timestamp': datetime.now().isoformat()
+    }
+    if data is not None:
+        response['data'] = data
+    return jsonify(response)
+
+def get_ollama_config():
+    """Get Ollama configuration from database"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_url'")
+    ollama_url = cursor.fetchone()[0]
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+    ollama_model = cursor.fetchone()[0]
+    cursor.close()
+    conn.close()
+    return ollama_url, ollama_model
+
+def get_user_memories(user_name, limit=10):
+    """Get persistent memories for a user"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, category, content, extracted_at, importance, tags
+        FROM persistent_memories
+        WHERE user_name = %s AND active = TRUE
+        ORDER BY importance DESC, extracted_at DESC
+        LIMIT %s
+    """, (user_name, limit))
+    
+    memories = []
+    for row in cursor.fetchall():
+        memories.append({
+            'id': row[0],
+            'category': row[1],
+            'content': row[2],
+            'extracted_at': format_timestamp_ny(row[3]) if row[3] else None,
+            'importance': row[4],
+            'tags': row[5] or []
+        })
+    
+    cursor.close()
+    conn.close()
+    return memories
+
+def get_user_schedule_events(user_name, limit=10):
+    """Get schedule events for a user"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, event_date, event_time, description, importance
+        FROM schedule_events
+        WHERE user_name = %s AND active = TRUE
+        ORDER BY event_date, event_time
+        LIMIT %s
+    """, (user_name, limit))
+    
+    events = []
+    for row in cursor.fetchall():
+        events.append({
+            'id': row[0],
+            'title': row[1],
+            'event_date': row[2].isoformat() if row[2] else None,
+            'event_time': str(row[3]) if row[3] else None,
+            'description': row[4],
+            'importance': row[5]
+        })
+    
+    cursor.close()
+    conn.close()
+    return events
+
+def get_conversation_history(session_id, limit=10):
+    """Get recent conversation history for a session"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT role, message, message_type, timestamp
+        FROM conversation_history
+        WHERE session_id = %s
+        ORDER BY timestamp DESC
+        LIMIT %s
+    """, (session_id, limit))
+    
+    history = []
+    for row in cursor.fetchall():
+        history.append({
+            'role': row[0],
+            'message': row[1],
+            'message_type': row[2],
+            'timestamp': format_timestamp_ny(row[3]) if row[3] else None
+        })
+    
+    cursor.close()
+    conn.close()
+    return list(reversed(history))  # Return in chronological order
+
+def build_ai_prompt(user_message, user_name, session_id, include_memories=True, include_schedule=True):
+    """Build AI prompt with context"""
+    # Get bot persona
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_config WHERE key = 'bot_persona'")
+    result = cursor.fetchone()
+    bot_persona = result[0] if result else "You are a helpful AI assistant."
+    cursor.close()
+    conn.close()
+    
+    # Build context
+    context_parts = [bot_persona]
+    
+    # Add memories if requested
+    if include_memories:
+        memories = get_user_memories(user_name, limit=5)
+        if memories:
+            context_parts.append("\nImportant information about this user:")
+            for mem in memories:
+                context_parts.append(f"- {mem['content']}")
+    
+    # Add schedule if requested
+    if include_schedule:
+        events = get_user_schedule_events(user_name, limit=5)
+        if events:
+            context_parts.append("\nUser's upcoming schedule:")
+            for event in events:
+                date_str = event['event_date']
+                time_str = f" at {event['event_time']}" if event['event_time'] else ""
+                context_parts.append(f"- {event['title']} on {date_str}{time_str}")
+    
+    # Add recent conversation history
+    if session_id:
+        history = get_conversation_history(session_id, limit=5)
+        if history:
+            context_parts.append("\nRecent conversation:")
+            for msg in history:
+                context_parts.append(f"{msg['role']}: {msg['message']}")
+    
+    # Add current message
+    context_parts.append(f"\nUser: {user_message}")
+    context_parts.append("Assistant:")
+    
+    return "\n".join(context_parts)
+
+def call_ollama_api(prompt, ollama_url, ollama_model):
+    """Call Ollama API to generate response"""
+    try:
+        response = requests.post(
+            f"{ollama_url}/api/generate",
+            json={
+                'model': ollama_model,
+                'prompt': prompt,
+                'stream': False,
+                'options': {
+                    'temperature': 0.7,
+                    'top_p': 0.9,
+                    'num_predict': 200,
+                    'stop': ['\n\n', 'User:', 'Assistant:']
+                }
+            },
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            return response.json().get('response', 'I did not understand that.').strip()
+        else:
+            raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+    except Exception as e:
+        raise Exception(f"Failed to call Ollama API: {str(e)}")
+
+def log_conversation(user_name, session_id, role, message, message_type='text'):
+    """Log conversation to database"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO conversation_history (user_name, session_id, role, message, message_type, timestamp)
+        VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+    """, (user_name, session_id, role, message, message_type))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Core AI Chat Endpoint
+@app.route('/api/chat', methods=['POST'])
+def flutter_chat():
+    """Main AI chat endpoint for Flutter app"""
+    try:
+        data = request.get_json()
+        if not data:
+            return create_error_response('INVALID_FORMAT', 'Request body must be JSON'), 400
+        
+        # Validate required fields
+        user_name = data.get('user_name')
+        message = data.get('message')
+        
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
+        if not message:
+            return create_error_response('MISSING_PARAMETER', 'message is required'), 400
+        
+        # Optional fields
+        session_id = data.get('session_id')
+        include_memories = data.get('include_memories', True)
+        include_schedule = data.get('include_schedule', True)
+        
+        # Generate session ID if not provided
+        if not session_id:
+            session_id = str(uuid.uuid4())
+        
+        # Get Ollama configuration
+        try:
+            ollama_url, ollama_model = get_ollama_config()
+        except Exception as e:
+            return create_error_response('CONFIG_ERROR', 'Failed to get AI configuration', str(e)), 500
+        
+        # Build prompt with context
+        try:
+            prompt = build_ai_prompt(message, user_name, session_id, include_memories, include_schedule)
+        except Exception as e:
+            return create_error_response('CONTEXT_ERROR', 'Failed to build context', str(e)), 500
+        
+        # Get AI response
+        try:
+            ai_response = call_ollama_api(prompt, ollama_url, ollama_model)
+        except Exception as e:
+            return create_error_response('OLLAMA_ERROR', 'Failed to generate AI response', str(e)), 500
+        
+        # Log conversation
+        try:
+            log_conversation(user_name, session_id, 'user', message)
+            log_conversation(user_name, session_id, 'assistant', ai_response)
+        except Exception as e:
+            # Log error but don't fail the request
+            print(f"Warning: Failed to log conversation: {e}")
+        
+        # Get context counts for response
+        memories_count = len(get_user_memories(user_name, limit=5)) if include_memories else 0
+        schedule_count = len(get_user_schedule_events(user_name, limit=5)) if include_schedule else 0
+        
+        return create_success_response({
+            'response': ai_response,
+            'session_id': session_id,
+            'context_used': {
+                'memories_count': memories_count,
+                'schedule_events_count': schedule_count
+            }
+        })
+        
+    except Exception as e:
+        return create_error_response('INTERNAL_ERROR', 'An unexpected error occurred', str(e)), 500
+
+# Enhanced Conversation APIs for Flutter
+@app.route('/api/conversations', methods=['GET'])
+def get_conversations_mobile():
+    """Get conversation history with enhanced filtering for mobile"""
+    try:
+        # Get query parameters
+        user_name = request.args.get('user_name')  # Required for Flutter
+        session_id = request.args.get('session_id')
+        limit = request.args.get('limit', 100, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Validate required parameters
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Build query with filters
+        query = """
+            SELECT id, user_name, message_type, role, message, timestamp
+            FROM conversation_history
+            WHERE user_name = %s
+        """
+        params = [user_name]
+
+        if session_id:
+            query += " AND session_id = %s"
+            params.append(session_id)
+
+        query += " ORDER BY timestamp DESC"
+        query += " LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        conversations = cursor.fetchall()
+
+        # Get total count for pagination
+        count_query = """
+            SELECT COUNT(*) FROM conversation_history
+            WHERE user_name = %s
+        """
+        count_params = [user_name]
+        
+        if session_id:
+            count_query += " AND session_id = %s"
+            count_params.append(session_id)
+            
+        cursor.execute(count_query, count_params)
+        total_count = cursor.fetchone()[0]
+
+        cursor.close()
+        conn.close()
+
+        conversations_data = [{
+            'id': c[0],
+            'user_name': c[1],
+            'message_type': c[2],
+            'role': c[3],
+            'message': c[4],
+            'timestamp': format_timestamp_ny(c[5]) if c[5] else None
+        } for c in conversations]
+
+        return create_success_response({
+            'conversations': conversations_data,
+            'pagination': {
+                'total': total_count,
+                'limit': limit,
+                'offset': offset,
+                'has_more': offset + limit < total_count
+            }
+        })
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to retrieve conversations', str(e)), 500
+
+@app.route('/api/conversations/sessions', methods=['GET'])
+def get_conversation_sessions():
+    """Get conversation sessions for a user"""
+    try:
+        user_name = request.args.get('user_name')
+        if not user_name:
+            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT session_id, user_name, started_at, last_activity, message_count
+            FROM conversation_sessions
+            WHERE user_name = %s
+            ORDER BY last_activity DESC
+        """, (user_name,))
+        
+        sessions = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        sessions_data = [{
+            'session_id': s[0],
+            'user_name': s[1],
+            'started_at': format_timestamp_ny(s[2]) if s[2] else None,
+            'last_activity': format_timestamp_ny(s[3]) if s[3] else None,
+            'message_count': s[4]
+        } for s in sessions]
+
+        return create_success_response({'sessions': sessions_data})
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to retrieve sessions', str(e)), 500
+
+# User Profile API
+@app.route('/api/users/<user_name>/profile', methods=['GET'])
+def get_user_profile(user_name):
+    """Get user profile with statistics"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get memory count
+        cursor.execute("SELECT COUNT(*) FROM persistent_memories WHERE user_name = %s AND active = TRUE", (user_name,))
+        memory_count = cursor.fetchone()[0]
+        
+        # Get schedule count
+        cursor.execute("SELECT COUNT(*) FROM schedule_events WHERE user_name = %s AND active = TRUE", (user_name,))
+        schedule_count = cursor.fetchone()[0]
+        
+        # Get conversation count
+        cursor.execute("SELECT COUNT(*) FROM conversation_history WHERE user_name = %s", (user_name,))
+        conversation_count = cursor.fetchone()[0]
+        
+        # Get last activity
+        cursor.execute("SELECT MAX(timestamp) FROM conversation_history WHERE user_name = %s", (user_name,))
+        last_active = cursor.fetchone()[0]
+        
+        cursor.close()
+        conn.close()
+
+        return create_success_response({
+            'user_name': user_name,
+            'memory_count': memory_count,
+            'schedule_count': schedule_count,
+            'conversation_count': conversation_count,
+            'last_active': format_timestamp_ny(last_active) if last_active else None
+        })
+        
+    except Exception as e:
+        return create_error_response('DATABASE_ERROR', 'Failed to retrieve user profile', str(e)), 500
+
+# Mobile Configuration API
+@app.route('/api/config/mobile', methods=['GET'])
+def get_mobile_config():
+    """Get mobile-specific configuration"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get Ollama model
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_model'")
+        ollama_model = cursor.fetchone()[0] if cursor.fetchone() else 'llama3.2:latest'
+        
+        # Get bot persona
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'bot_persona'")
+        result = cursor.fetchone()
+        bot_persona = result[0] if result else ''
+        
+        cursor.close()
+        conn.close()
+
+        return create_success_response({
+            'ollama_model': ollama_model,
+            'bot_persona': bot_persona,
+            'features_enabled': {
+                'memories': True,
+                'schedules': True,
+                'voice': False
+            }
+        })
+        
+    except Exception as e:
+        return create_error_response('CONFIG_ERROR', 'Failed to retrieve configuration', str(e)), 500
+
+# Health Check for Mobile
+@app.route('/api/health/mobile', methods=['GET'])
+def mobile_health_check():
+    """Health check for mobile API"""
+    try:
+        # Test database connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        conn.close()
+        
+        # Test Ollama connection
+        try:
+            ollama_url, ollama_model = get_ollama_config()
+            response = requests.get(f"{ollama_url}/api/tags", timeout=5)
+            ollama_status = "healthy" if response.status_code == 200 else "unhealthy"
+        except:
+            ollama_status = "unhealthy"
+        
+        return create_success_response({
+            'status': 'healthy',
+            'database': 'connected',
+            'ollama': ollama_status,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return create_error_response('HEALTH_CHECK_FAILED', 'Health check failed', str(e)), 500
 
 if __name__ == '__main__':
     init_config_table()

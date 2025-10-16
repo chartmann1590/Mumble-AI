@@ -8,6 +8,7 @@ import 'services/storage_service.dart';
 import 'services/api_service.dart';
 import 'services/audio_service.dart';
 import 'services/logging_service.dart';
+import 'services/session_service.dart';
 import 'screens/server_connect_screen.dart';
 import 'screens/user_selection_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -49,6 +50,7 @@ void main() async {
   final apiService = ApiService.getInstance();
   final audioService = AudioService.getInstance();
   final loggingService = LoggingService.getInstance();
+  final sessionService = await SessionService.getInstance();
   
   // Set ApiService reference for automatic log sending
   loggingService.setApiService(apiService);
@@ -64,6 +66,7 @@ void main() async {
     apiService: apiService,
     audioService: audioService,
     loggingService: loggingService,
+    sessionService: sessionService,
   ));
 }
 
@@ -72,6 +75,7 @@ class MyApp extends StatelessWidget {
   final ApiService apiService;
   final AudioService audioService;
   final LoggingService loggingService;
+  final SessionService sessionService;
 
   const MyApp({
     Key? key,
@@ -79,6 +83,7 @@ class MyApp extends StatelessWidget {
     required this.apiService,
     required this.audioService,
     required this.loggingService,
+    required this.sessionService,
   }) : super(key: key);
 
   @override
@@ -89,6 +94,7 @@ class MyApp extends StatelessWidget {
         Provider<ApiService>.value(value: apiService),
         Provider<AudioService>.value(value: audioService),
         Provider<LoggingService>.value(value: loggingService),
+        Provider<SessionService>.value(value: sessionService),
       ],
       child: MaterialApp(
         title: AppConstants.appName,

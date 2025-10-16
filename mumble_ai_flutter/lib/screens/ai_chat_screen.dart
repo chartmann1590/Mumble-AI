@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:dio/dio.dart';
 import '../services/api_service.dart';
+import '../services/storage_service.dart';
+import '../services/session_service.dart';
 import '../services/logging_service.dart';
 import '../widgets/message_bubble.dart';
 import '../utils/theme.dart';
@@ -11,11 +12,13 @@ class ChatMessage {
   final String message;
   final bool isUser;
   final DateTime timestamp;
+  final Map<String, dynamic>? contextUsed;
 
   ChatMessage({
     required this.message,
     required this.isUser,
     required this.timestamp,
+    this.contextUsed,
   });
 }
 
@@ -32,14 +35,16 @@ class _AiChatScreenState extends State<AiChatScreen> {
   final List<ChatMessage> _messages = [];
   bool _isLoading = false;
   String? _errorMessage;
-  String? _ollamaUrl;
-  String? _ollamaModel;
-  String? _botPersona;
+  String? _currentUser;
+  String? _sessionId;
+  bool _includeMemories = true;
+  bool _includeSchedule = true;
+  Map<String, dynamic>? _lastContextUsed;
 
   @override
   void initState() {
     super.initState();
-    _loadOllamaConfig();
+    _loadUserAndSession();
     
     // Log screen entry
     final loggingService = Provider.of<LoggingService>(context, listen: false);
@@ -53,70 +58,58 @@ class _AiChatScreenState extends State<AiChatScreen> {
     super.dispose();
   }
 
-  Future<void> _loadOllamaConfig() async {
+  Future<void> _loadUserAndSession() async {
     final loggingService = Provider.of<LoggingService>(context, listen: false);
     final startTime = DateTime.now();
     
     try {
-      final apiService = Provider.of<ApiService>(context, listen: false);
-      final response = await apiService.get(AppConstants.ollamaConfigEndpoint);
+      final storageService = Provider.of<StorageService>(context, listen: false);
+      final sessionService = Provider.of<SessionService>(context, listen: false);
       
-      final data = apiService.safeCastResponseData(response.data);
-      if (data != null) {
+      // Load current user
+      final user = await storageService.getSelectedUser();
+      if (user == null) {
         setState(() {
-          _ollamaUrl = data['url'];
-          _ollamaModel = data['model'];
+          _errorMessage = 'No user selected. Please select a user first.';
         });
-        
-        // Load bot persona
-        await _loadBotPersona();
-        
-        final duration = DateTime.now().difference(startTime);
-        loggingService.logPerformance('Load Ollama Config', duration, screen: 'AiChatScreen');
-        loggingService.info('Ollama config loaded successfully', screen: 'AiChatScreen', data: {
-          'ollamaUrl': _ollamaUrl,
-          'ollamaModel': _ollamaModel,
-        });
-      } else {
-        throw Exception('Invalid data format received from server');
+        return;
       }
+      
+      // Get or create session ID
+      final sessionId = sessionService.getOrCreateSessionId();
+      
+      setState(() {
+        _currentUser = user;
+        _sessionId = sessionId;
+      });
+      
+      final duration = DateTime.now().difference(startTime);
+      loggingService.logPerformance('Load User and Session', duration, screen: 'AiChatScreen');
+      loggingService.info('User and session loaded successfully', screen: 'AiChatScreen', data: {
+        'user': user,
+        'sessionId': sessionId,
+      });
     } catch (e) {
       final duration = DateTime.now().difference(startTime);
-      loggingService.logPerformance('Load Ollama Config (ERROR)', duration, screen: 'AiChatScreen');
+      loggingService.logPerformance('Load User and Session (ERROR)', duration, screen: 'AiChatScreen');
       loggingService.logException(e, null, screen: 'AiChatScreen');
       
       setState(() {
-        _errorMessage = 'Failed to load Ollama configuration: ${e.toString()}';
+        _errorMessage = 'Failed to load user information: ${e.toString()}';
       });
-    }
-  }
-
-  Future<void> _loadBotPersona() async {
-    try {
-      final apiService = Provider.of<ApiService>(context, listen: false);
-      final response = await apiService.get(AppConstants.personaEndpoint);
-      
-      final data = apiService.safeCastResponseData(response.data);
-      if (data != null) {
-        setState(() {
-          _botPersona = data['persona'] ?? '';
-        });
-      }
-    } catch (e) {
-      // Persona is optional, don't fail if it's not available
-      final loggingService = Provider.of<LoggingService>(context, listen: false);
-      loggingService.warning('Failed to load bot persona: ${e.toString()}', screen: 'AiChatScreen');
     }
   }
 
   Future<void> _sendMessage() async {
     final message = _messageController.text.trim();
-    if (message.isEmpty || _isLoading) return;
+    if (message.isEmpty || _isLoading || _currentUser == null) return;
 
     final loggingService = Provider.of<LoggingService>(context, listen: false);
     loggingService.logUserAction('Send AI Chat Message', screen: 'AiChatScreen', data: {
       'messageLength': message.length,
-      'hasPersona': _botPersona != null && _botPersona!.isNotEmpty,
+      'includeMemories': _includeMemories,
+      'includeSchedule': _includeSchedule,
+      'sessionId': _sessionId,
     });
 
     // Add user message
@@ -136,28 +129,32 @@ class _AiChatScreenState extends State<AiChatScreen> {
     _scrollToBottom();
 
     try {
-      // Send message to Ollama
-      final response = await _sendToOllama(message);
+      // Send message to Mumble AI API
+      final response = await _sendToMumbleAI(message);
       
       // Add AI response
       final aiMessage = ChatMessage(
-        message: response,
+        message: response['response'],
         isUser: false,
         timestamp: DateTime.now(),
+        contextUsed: response['context_used'],
       );
       
       setState(() {
         _messages.add(aiMessage);
         _isLoading = false;
+        _lastContextUsed = response['context_used'];
       });
+      
+      // Increment message count in session
+      final sessionService = Provider.of<SessionService>(context, listen: false);
+      await sessionService.incrementMessageCount();
       
       loggingService.info('AI Chat response received', screen: 'AiChatScreen', data: {
-        'responseLength': response.length,
+        'responseLength': response['response'].length,
         'totalMessages': _messages.length,
+        'contextUsed': response['context_used'],
       });
-      
-      // Log conversation to server
-      await _logConversationToServer(message, response);
       
       _scrollToBottom();
     } catch (e) {
@@ -170,58 +167,52 @@ class _AiChatScreenState extends State<AiChatScreen> {
     }
   }
 
-  Future<String> _sendToOllama(String message) async {
-    if (_ollamaUrl == null || _ollamaModel == null) {
-      throw Exception('Ollama configuration not available');
+  Future<Map<String, dynamic>> _sendToMumbleAI(String message) async {
+    if (_currentUser == null) {
+      throw Exception('No user selected');
     }
 
     final loggingService = Provider.of<LoggingService>(context, listen: false);
     final startTime = DateTime.now();
 
-    // Create a temporary Dio instance for Ollama API
-    final dio = Dio();
-    dio.options.baseUrl = _ollamaUrl!;
-    dio.options.connectTimeout = 180000; // 3 minutes for AI responses
-    dio.options.receiveTimeout = 180000; // 3 minutes for AI responses
-
     try {
-      // Build the prompt with persona if available
-      String fullPrompt = message;
-      if (_botPersona != null && _botPersona!.isNotEmpty) {
-        fullPrompt = '${_botPersona}\n\nUser: $message\nAssistant:';
-      }
-
-      loggingService.info('Sending message to Ollama', screen: 'AiChatScreen', data: {
-        'ollamaUrl': _ollamaUrl,
-        'model': _ollamaModel,
-        'hasPersona': _botPersona != null && _botPersona!.isNotEmpty,
-        'promptLength': fullPrompt.length,
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      
+      loggingService.info('Sending message to Mumble AI API', screen: 'AiChatScreen', data: {
+        'user': _currentUser,
+        'sessionId': _sessionId,
+        'includeMemories': _includeMemories,
+        'includeSchedule': _includeSchedule,
+        'messageLength': message.length,
       });
 
-      final response = await dio.post('/api/generate', data: {
-        'model': _ollamaModel,
-        'prompt': fullPrompt,
-        'stream': false,
-        'options': {
-          'temperature': 0.7,
-          'top_p': 0.9,
-          'max_tokens': 2048,
-        }
+      final response = await apiService.postChat(AppConstants.chatEndpoint, data: {
+        'user_name': _currentUser,
+        'message': message,
+        'session_id': _sessionId,
+        'include_memories': _includeMemories,
+        'include_schedule': _includeSchedule,
       });
 
       final duration = DateTime.now().difference(startTime);
-      loggingService.logPerformance('Ollama API Call', duration, screen: 'AiChatScreen', data: {
-        'model': _ollamaModel,
-        'responseLength': response.data['response']?.toString().length ?? 0,
+      loggingService.logPerformance('Mumble AI API Call', duration, screen: 'AiChatScreen', data: {
+        'responseLength': response.data['data']['response']?.toString().length ?? 0,
+        'contextUsed': response.data['data']['context_used'],
       });
 
-      return response.data['response'] ?? 'No response received';
+      // Parse the response
+      final responseData = response.data;
+      if (responseData['success'] == true && responseData['data'] != null) {
+        return responseData['data'];
+      } else {
+        throw Exception('Invalid response format from server');
+      }
     } catch (e) {
       final duration = DateTime.now().difference(startTime);
-      loggingService.logPerformance('Ollama API Call (ERROR)', duration, screen: 'AiChatScreen');
+      loggingService.logPerformance('Mumble AI API Call (ERROR)', duration, screen: 'AiChatScreen');
       loggingService.logException(e, null, screen: 'AiChatScreen');
       
-      throw Exception('Ollama API error: ${e.toString()}');
+      throw Exception('Mumble AI API error: ${e.toString()}');
     }
   }
 
@@ -247,24 +238,6 @@ class _AiChatScreenState extends State<AiChatScreen> {
     );
   }
 
-  Future<void> _logConversationToServer(String userMessage, String aiResponse) async {
-    try {
-      final apiService = Provider.of<ApiService>(context, listen: false);
-      final loggingService = Provider.of<LoggingService>(context, listen: false);
-      
-      await apiService.post('/api/conversations/ai_chat', data: {
-        'user_message': userMessage,
-        'ai_response': aiResponse,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
-      
-      loggingService.info('AI Chat conversation logged to server', screen: 'AiChatScreen');
-    } catch (e) {
-      final loggingService = Provider.of<LoggingService>(context, listen: false);
-      loggingService.warning('Failed to log AI chat conversation to server: ${e.toString()}', screen: 'AiChatScreen');
-    }
-  }
-
   void _clearChat() {
     final loggingService = Provider.of<LoggingService>(context, listen: false);
     
@@ -272,20 +245,28 @@ class _AiChatScreenState extends State<AiChatScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Clear Chat'),
-        content: const Text('Are you sure you want to clear all messages?'),
+        content: const Text('Are you sure you want to clear all messages? This will also reset your session.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               loggingService.logUserAction('Clear Chat', screen: 'AiChatScreen', data: {
                 'messageCount': _messages.length,
               });
               
+              // Reset session
+              final sessionService = Provider.of<SessionService>(context, listen: false);
+              await sessionService.resetSession();
+              
+              // Reload session
+              await _loadUserAndSession();
+              
               setState(() {
                 _messages.clear();
+                _lastContextUsed = null;
               });
               Navigator.pop(context);
             },
@@ -298,6 +279,120 @@ class _AiChatScreenState extends State<AiChatScreen> {
 
   String _formatTimestamp(DateTime timestamp) {
     return '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildContextIndicator() {
+    if (_lastContextUsed == null) return const SizedBox.shrink();
+    
+    final memoriesCount = _lastContextUsed!['memories_count'] ?? 0;
+    final scheduleCount = _lastContextUsed!['schedule_events_count'] ?? 0;
+    
+    if (memoriesCount == 0 && scheduleCount == 0) return const SizedBox.shrink();
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppTheme.spacingS),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.spacingM,
+        vertical: AppTheme.spacingS,
+      ),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(AppTheme.radiusM),
+        border: Border.all(
+          color: AppTheme.primaryColor.withOpacity(0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.psychology,
+            size: 16,
+            color: AppTheme.primaryColor,
+          ),
+          const SizedBox(width: AppTheme.spacingS),
+          Text(
+            'Using context: ${memoriesCount} memories, ${scheduleCount} events',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppTheme.primaryColor,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContextToggles() {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.spacingM,
+        vertical: AppTheme.spacingS,
+      ),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: const Border(
+          bottom: BorderSide(color: AppTheme.borderColor),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.psychology,
+                  size: 16,
+                  color: AppTheme.textSecondary,
+                ),
+                const SizedBox(width: AppTheme.spacingS),
+                Text(
+                  'Memories',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                Switch(
+                  value: _includeMemories,
+                  onChanged: (value) {
+                    setState(() {
+                      _includeMemories = value;
+                    });
+                  },
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.calendar_today,
+                  size: 16,
+                  color: AppTheme.textSecondary,
+                ),
+                const SizedBox(width: AppTheme.spacingS),
+                Text(
+                  'Schedule',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                Switch(
+                  value: _includeSchedule,
+                  onChanged: (value) {
+                    setState(() {
+                      _includeSchedule = value;
+                    });
+                  },
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -344,6 +439,12 @@ class _AiChatScreenState extends State<AiChatScreen> {
               ),
             ),
           
+          // Context toggles
+          _buildContextToggles(),
+          
+          // Context indicator
+          _buildContextIndicator(),
+          
           // Messages list
           Expanded(
             child: _messages.isEmpty
@@ -371,6 +472,16 @@ class _AiChatScreenState extends State<AiChatScreen> {
                           ),
                           textAlign: TextAlign.center,
                         ),
+                        if (_currentUser != null) ...[
+                          const SizedBox(height: AppTheme.spacingM),
+                          Text(
+                            'Chatting as: $_currentUser',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppTheme.primaryColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   )
@@ -400,14 +511,18 @@ class _AiChatScreenState extends State<AiChatScreen> {
                                     padding: const EdgeInsets.all(AppTheme.spacingM),
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
-                                      children: const [
-                                        SizedBox(
-                                          width: 16,
-                                          height: 16,
+                                      children: [
+                                        const SizedBox(
+                                          width: 20,
+                                          height: 20,
                                           child: CircularProgressIndicator(strokeWidth: 2),
                                         ),
-                                        SizedBox(width: AppTheme.spacingS),
-                                        Text('AI is thinking...'),
+                                        const SizedBox(width: AppTheme.spacingS),
+                                        Text(
+                                          _includeMemories || _includeSchedule 
+                                              ? 'AI is thinking with your context...\nThis may take up to 5 minutes for complex requests.'
+                                              : 'AI is thinking...\nThis may take up to 5 minutes for complex requests.',
+                                        ),
                                       ],
                                     ),
                                   ),
@@ -454,12 +569,12 @@ class _AiChatScreenState extends State<AiChatScreen> {
                     maxLines: null,
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _sendMessage(),
-                    enabled: !_isLoading,
+                    enabled: !_isLoading && _currentUser != null,
                   ),
                 ),
                 const SizedBox(width: AppTheme.spacingS),
                 FloatingActionButton(
-                  onPressed: _isLoading ? null : _sendMessage,
+                  onPressed: _isLoading || _currentUser == null ? null : _sendMessage,
                   mini: true,
                   child: _isLoading
                       ? const SizedBox(

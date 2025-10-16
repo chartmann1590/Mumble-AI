@@ -47,10 +47,12 @@ class AppConstants {
   static const String testEmailEndpoint = '/api/email/test';
   static const String generateSignatureEndpoint = '/api/email/generate-signature';
   static const String retryEmailEndpoint = '/api/email/retry';
+  static const String chatEndpoint = '/api/chat';
 
   // Default Values
   static const String defaultServerUrl = 'http://192.168.1.100:5002';
   static const int defaultTimeout = 10000; // 10 seconds
+  static const int chatTimeout = 300000; // 5 minutes for AI chat requests
   static const int defaultPageSize = 50;
   static const int maxPageSize = 200;
 

@@ -244,6 +244,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         title: const Text('Schedule'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.chat),
+            onPressed: () {
+              Navigator.pushNamed(context, '/chat');
+            },
+            tooltip: 'Ask AI about your schedule',
+          ),
+          IconButton(
             icon: Icon(_showCalendarView ? Icons.list : Icons.calendar_today),
             onPressed: () {
               setState(() {
@@ -354,6 +361,14 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               onPressed: _showAddEventDialog,
               icon: const Icon(Icons.add),
               label: const Text('Add Event'),
+            ),
+            const SizedBox(height: AppTheme.spacingM),
+            TextButton.icon(
+              onPressed: () {
+                Navigator.pushNamed(context, '/chat');
+              },
+              icon: const Icon(Icons.chat),
+              label: const Text('Ask AI about your schedule'),
             ),
           ],
         ),

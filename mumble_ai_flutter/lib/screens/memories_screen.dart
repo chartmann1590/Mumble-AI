@@ -224,6 +224,13 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
         title: const Text('Memories'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.chat),
+            onPressed: () {
+              Navigator.pushNamed(context, '/chat');
+            },
+            tooltip: 'Ask AI about your memories',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadData,
             tooltip: 'Refresh',
@@ -330,6 +337,14 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
               onPressed: _showAddMemoryDialog,
               icon: const Icon(Icons.add),
               label: const Text('Add Memory'),
+            ),
+            const SizedBox(height: AppTheme.spacingM),
+            TextButton.icon(
+              onPressed: () {
+                Navigator.pushNamed(context, '/chat');
+              },
+              icon: const Icon(Icons.chat),
+              label: const Text('Ask AI about memories'),
             ),
           ],
         ),
