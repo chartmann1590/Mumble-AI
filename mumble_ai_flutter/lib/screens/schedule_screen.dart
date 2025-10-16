@@ -80,7 +80,20 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         queryParameters: queryParams,
       );
 
-      final events = (response.data as List)
+      // Handle both new wrapped format and legacy array format
+      List<dynamic> eventsList;
+      if (response.data is Map<String, dynamic>) {
+        // New wrapped format: {"success": true, "data": {"events": [...], "pagination": {...}}}
+        final data = response.data['data'];
+        eventsList = data['events'] as List;
+      } else if (response.data is List) {
+        // Legacy format: [...]
+        eventsList = response.data as List;
+      } else {
+        throw Exception('Unexpected response format: expected Map or List, got ${response.data.runtimeType}');
+      }
+
+      final events = eventsList
           .map((json) => ScheduleEvent.fromJson(json))
           .toList();
 
@@ -111,8 +124,20 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.scheduleUsersEndpoint);
       
+      // Handle both new wrapped format and legacy array format
+      List<dynamic> usersList;
+      if (response.data is Map<String, dynamic>) {
+        // New wrapped format (if backend is updated)
+        usersList = response.data['data'] as List;
+      } else if (response.data is List) {
+        // Legacy format (current)
+        usersList = response.data as List;
+      } else {
+        throw Exception('Unexpected response format: expected Map or List, got ${response.data.runtimeType}');
+      }
+      
       setState(() {
-        _users = (response.data as List).map((item) => item.toString()).toList();
+        _users = usersList.map((item) => item.toString()).toList();
       });
     } catch (e, stackTrace) {
       final loggingService = Provider.of<LoggingService>(context, listen: false);

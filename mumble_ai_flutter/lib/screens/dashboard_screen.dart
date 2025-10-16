@@ -159,33 +159,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       
       if (response.data != null) {
-        // Handle both List and other response formats
-        dynamic data = response.data;
-        
-        if (data is List) {
-          final events = data
-              .map((json) => ScheduleEvent.fromJson(json))
-              .toList();
-          
-          if (mounted) {
-            setState(() {
-              _upcomingEvents = events;
-            });
+        // Handle both new wrapped format and legacy array format
+        List<dynamic> eventsList;
+        if (response.data is Map<String, dynamic>) {
+          // New wrapped format: {"success": true, "data": [...]}
+          final data = response.data['data'];
+          if (data is List) {
+            eventsList = data;
+          } else {
+            eventsList = [];
           }
-          
-          final duration = DateTime.now().difference(startTime);
-          loggingService.logPerformance('Load Upcoming Events', duration, screen: 'DashboardScreen');
+        } else if (response.data is List) {
+          // Legacy format: [...]
+          eventsList = response.data as List;
         } else {
-          // If it's not a list, treat it as empty
-          if (mounted) {
-            setState(() {
-              _upcomingEvents = [];
-            });
-          }
-          
-          final duration = DateTime.now().difference(startTime);
-          loggingService.logPerformance('Load Upcoming Events', duration, screen: 'DashboardScreen');
+          // Unexpected format, treat as empty
+          eventsList = [];
         }
+        
+        final events = eventsList
+            .map((json) => ScheduleEvent.fromJson(json))
+            .toList();
+        
+        if (mounted) {
+          setState(() {
+            _upcomingEvents = events;
+          });
+        }
+        
+        final duration = DateTime.now().difference(startTime);
+        loggingService.logPerformance('Load Upcoming Events', duration, screen: 'DashboardScreen');
       } else {
         if (mounted) {
           setState(() {

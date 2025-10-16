@@ -84,7 +84,20 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
         queryParameters: queryParams,
       );
 
-      final memories = (response.data as List)
+      // Handle both new wrapped format and legacy array format
+      List<dynamic> memoriesList;
+      if (response.data is Map<String, dynamic>) {
+        // New wrapped format: {"success": true, "data": {"memories": [...], "pagination": {...}}}
+        final data = response.data['data'];
+        memoriesList = data['memories'] as List;
+      } else if (response.data is List) {
+        // Legacy format: [...]
+        memoriesList = response.data as List;
+      } else {
+        throw Exception('Unexpected response format: expected Map or List, got ${response.data.runtimeType}');
+      }
+
+      final memories = memoriesList
           .map((json) => Memory.fromJson(json))
           .toList();
 
@@ -109,8 +122,20 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.get(AppConstants.usersEndpoint);
       
+      // Handle both new wrapped format and legacy array format
+      List<dynamic> usersList;
+      if (response.data is Map<String, dynamic>) {
+        // New wrapped format (if backend is updated)
+        usersList = response.data['data'] as List;
+      } else if (response.data is List) {
+        // Legacy format (current)
+        usersList = response.data as List;
+      } else {
+        throw Exception('Unexpected response format: expected Map or List, got ${response.data.runtimeType}');
+      }
+      
       setState(() {
-        _users = (response.data as List).map((item) => item.toString()).toList();
+        _users = usersList.map((item) => item.toString()).toList();
       });
     } catch (e, stackTrace) {
       final loggingService = Provider.of<LoggingService>(context, listen: false);
