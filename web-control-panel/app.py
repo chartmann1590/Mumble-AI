@@ -864,15 +864,13 @@ def get_memories():
     """Get persistent memories with enhanced filtering for mobile"""
     try:
         # Get query parameters
-        user_name = request.args.get('user_name')  # Required for Flutter
+        user_name = request.args.get('user_name')  # Optional - if not provided, return all users' memories
         category = request.args.get('category')
         importance = request.args.get('importance', type=int)
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
         
-        # Validate required parameters
-        if not user_name:
-            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
+        # user_name is optional - if not provided, return all users' memories
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1119,7 +1117,7 @@ def get_users():
     cursor.close()
     conn.close()
 
-    return jsonify({'users': users})
+    return jsonify(users)
 
 # Email Settings API
 @app.route('/api/email/settings', methods=['GET'])

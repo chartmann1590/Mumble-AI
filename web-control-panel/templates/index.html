@@ -1828,7 +1828,8 @@
         async function loadUsers() {
             try {
                 const response = await fetch('/api/users');
-                const users = await response.json();
+                const data = await response.json();
+                const users = Array.isArray(data) ? data : (data.users || []);
 
                 const select = document.getElementById('user-filter');
                 // Keep the "All Users" option
@@ -1851,11 +1852,12 @@
                 const categoryFilter = document.getElementById('category-filter').value;
 
                 let url = '/api/memories?';
-                if (userFilter) url += `user=${encodeURIComponent(userFilter)}&`;
+                if (userFilter) url += `user_name=${encodeURIComponent(userFilter)}&`;
                 if (categoryFilter) url += `category=${encodeURIComponent(categoryFilter)}`;
 
                 const response = await fetch(url);
-                const memories = await response.json();
+                const result = await response.json();
+                const memories = result.data?.memories || result.memories || result || [];
 
                 const container = document.getElementById('memories-list');
 
