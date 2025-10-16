@@ -550,11 +550,18 @@
 
         async function loadSchedule() {
             const user = document.getElementById('userFilter').value;
-            const url = user ? `/api/schedule?user=${encodeURIComponent(user)}` : '/api/schedule';
+            const url = user ? `/api/schedule?user_name=${encodeURIComponent(user)}` : '/api/schedule';
 
             try {
                 const response = await fetch(url);
-                const events = await response.json();
+                const data = await response.json();
+                
+                // Handle the new response format: {success: true, data: {events: []}}
+                if (!data.success) {
+                    throw new Error(data.error?.message || 'Failed to load schedule');
+                }
+                
+                const events = data.data.events;
 
                 const calendarEvents = events.map(event => {
                     const datetime = event.event_time ?

@@ -1830,31 +1830,32 @@ def retry_failed_email(log_id):
 # Enhanced Schedule APIs for Flutter
 @app.route('/api/schedule', methods=['GET'])
 def get_schedule():
-    """Get schedule events with enhanced filtering for mobile"""
+    """Get schedule events with enhanced filtering for mobile and web"""
     try:
         # Get query parameters
-        user_name = request.args.get('user_name')  # Required for Flutter
+        user_name = request.args.get('user_name')  # Optional - if not provided, get all users
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         upcoming = request.args.get('upcoming', type=int)  # Next N days
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
-        
-        # Validate required parameters
-        if not user_name:
-            return create_error_response('MISSING_PARAMETER', 'user_name is required'), 400
 
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Build query with filters
+        # Build query with filters - make user_name optional
         query = """
             SELECT id, user_name, title, event_date, event_time, description, importance, created_at,
                    reminder_enabled, reminder_minutes, recipient_email, reminder_sent
             FROM schedule_events
-            WHERE active = TRUE AND user_name = %s
+            WHERE active = TRUE
         """
-        params = [user_name]
+        params = []
+        
+        # Add user filter only if user_name is provided
+        if user_name:
+            query += " AND user_name = %s"
+            params.append(user_name)
 
         if start_date:
             query += " AND event_date >= %s"
@@ -1878,9 +1879,14 @@ def get_schedule():
         # Get total count for pagination
         count_query = """
             SELECT COUNT(*) FROM schedule_events
-            WHERE active = TRUE AND user_name = %s
+            WHERE active = TRUE
         """
-        count_params = [user_name]
+        count_params = []
+        
+        # Add user filter only if user_name is provided
+        if user_name:
+            count_query += " AND user_name = %s"
+            count_params.append(user_name)
         
         if start_date:
             count_query += " AND event_date >= %s"
