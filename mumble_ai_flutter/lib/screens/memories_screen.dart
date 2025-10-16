@@ -72,7 +72,7 @@ class _MemoriesScreenState extends State<MemoriesScreen> {
       // Always include the selected user from storage
       final currentUser = await storageService.getSelectedUser();
       if (currentUser != null) {
-        queryParams['user'] = currentUser;
+        queryParams['user_name'] = currentUser;
       }
       
       if (_selectedCategory != null) {

@@ -72,7 +72,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       // Always include the selected user from storage
       final currentUser = await storageService.getSelectedUser();
       if (currentUser != null) {
-        queryParams['user'] = currentUser;
+        queryParams['user_name'] = currentUser;
       }
 
       final response = await apiService.get(
