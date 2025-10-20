@@ -2,7 +2,7 @@
 
 A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers with advanced speech recognition, multiple text-to-speech engines, intelligent memory systems, email integration, and voice cloning capabilities.
 
-![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 
@@ -16,13 +16,13 @@ A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers wit
 - **Silence Detection**: Automatically processes speech after 1.5 seconds of silence
 - **Audio Processing**: Professional-grade audio resampling (48kHz for Mumble compatibility)
 
-### 🧠 Smart Memory System (NEW!)
+### 🧠 Smart Memory System (UPDATED)
 - **Multi-Layer Memory**: Redis caching, ChromaDB vector storage, and PostgreSQL persistence
 - **Entity Intelligence**: Advanced named entity recognition for people, places, organizations, dates, and events
 - **Hybrid Search**: Combines semantic similarity (70%) with keyword matching (30%) for superior context retrieval
 - **Memory Consolidation**: Automatic summarization reduces token usage by ~30% while preserving important information
 - **Conversation Context**: Multi-turn understanding with coreference resolution and topic tracking
-- **Real-time Monitoring**: Comprehensive dashboard for memory system health and performance
+- **Real-time Monitoring**: Comprehensive dashboard for memory system health and performance (Web + Flutter)
 - **Background Processing**: Non-blocking consolidation jobs and entity extraction
 - **Performance Optimization**: 3-5x faster search with 40% better relevance than previous systems
 
@@ -828,6 +828,13 @@ deploy:
 Download additional voices from https://github.com/rhasspy/piper and update the download URLs in `web-control-panel/download_voices.py`.
 
 ## Recent Updates
+
+### 1.5.1 - Memory Dashboard & DB Enhancements (October 20, 2025)
+- Web control panel: new Memory System dashboard with status cards, search, entities, consolidation, and persistent memories management
+- Flutter app: new Memory System screen, improved Memories screen, search components, entity cards, and better error handling
+- API service updates: safer response casting, improved error mapping, extended chat timeouts, new memory endpoints
+- Database: added entity tracking, consolidation logs, persistent memories enhancements, and performance indexes
+- See `docs/CHANGELOG_2025-10-20.md` for full details and migration notes
 
 ### v1.5.0 - Smart Memory System Release (January 15, 2025)
 - **🧠 Smart Memory System**: Revolutionary multi-layer memory architecture with Redis, ChromaDB, and PostgreSQL
