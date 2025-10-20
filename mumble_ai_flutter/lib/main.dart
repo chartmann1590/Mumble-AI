@@ -23,6 +23,7 @@ import 'screens/email_logs_screen.dart';
 import 'screens/persona_screen.dart';
 import 'screens/advanced_settings_screen.dart';
 import 'screens/whisper_language_screen.dart';
+import 'screens/memory_system_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -115,6 +116,7 @@ class MyApp extends StatelessWidget {
                   '/persona': (context) => const PersonaScreen(),
                   '/advanced-settings': (context) => const AdvancedSettingsScreen(),
                   '/whisper-language': (context) => const WhisperLanguageScreen(),
+                  '/memory-system': (context) => const MemorySystemScreen(),
                 },
         debugShowCheckedModeBanner: false,
       ),

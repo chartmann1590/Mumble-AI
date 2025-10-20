@@ -68,11 +68,11 @@ class EmailSummaryService:
     def call_ollama_with_retry(self, prompt: str, max_retries: int = 3, timeout: int = 300) -> Optional[str]:
         """
         Call Ollama API with retry logic.
-        
+
         Args:
             prompt: The prompt to send to Ollama
             max_retries: Maximum number of retry attempts (default: 3)
-            timeout: Timeout in seconds for each attempt (default: 120)
+            timeout: Timeout in seconds for each attempt (default: 300)
             
         Returns:
             Generated text response or None if all retries failed
@@ -5077,6 +5077,148 @@ def api_send_summary():
 
     except Exception as e:
         logger.error(f"Error in manual summary endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/retry/<int:email_log_id>', methods=['POST'])
+def api_retry_email(email_log_id):
+    """Retry generating and sending a failed email reply"""
+    try:
+        if not email_service:
+            return jsonify({'error': 'Service not initialized'}), 500
+
+        settings = email_service.get_email_settings()
+        if not settings:
+            return jsonify({'error': 'Email settings not configured'}), 400
+
+        logger.info(f"Retry request received for email_log_id: {email_log_id}")
+
+        # Get the failed email log entry
+        conn = email_service.get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, thread_id, to_email, subject, from_email, mapped_user
+                FROM email_logs
+                WHERE id = %s AND direction = 'sent' AND status = 'error'
+            """, (email_log_id,))
+            failed_email = cursor.fetchone()
+
+        if not failed_email:
+            return jsonify({'error': 'Failed email not found or not in error status'}), 404
+
+        _, thread_id, sender_email, subject, from_email, mapped_user = failed_email
+
+        if not thread_id:
+            return jsonify({'error': 'Cannot retry: email has no thread_id'}), 400
+
+        # Get the original incoming email from the same thread
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT full_body, subject, from_email, to_email, attachments_metadata
+                FROM email_logs
+                WHERE thread_id = %s AND direction = 'received'
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (thread_id,))
+            incoming_email = cursor.fetchone()
+
+        if not incoming_email:
+            return jsonify({'error': 'Cannot find original incoming email for this thread'}), 404
+
+        original_body, original_subject, original_sender, original_recipient, attachments_metadata_json = incoming_email
+
+        # Parse attachments metadata if present
+        attachments_analysis = None
+        if attachments_metadata_json:
+            try:
+                attachments_metadata = json.loads(attachments_metadata_json)
+                # Convert metadata back to analysis format (without file paths since they're temporary)
+                attachments_analysis = []
+                for att in attachments_metadata:
+                    attachments_analysis.append({
+                        'filename': att.get('filename', 'unknown'),
+                        'type': att.get('type', 'unknown'),
+                        'size': att.get('size', 0),
+                        'analysis_text': att.get('analysis_preview', '')
+                    })
+            except:
+                pass
+
+        # Retry generating the reply in background
+        def retry_in_background():
+            try:
+                logger.info(f"Retrying email reply generation for thread_id={thread_id}")
+
+                # Generate AI reply
+                reply_text = email_service.generate_ai_reply(
+                    sender=original_sender,
+                    subject=original_subject,
+                    body=original_body,
+                    settings=settings,
+                    thread_id=thread_id,
+                    attachments_analysis=attachments_analysis
+                )
+
+                if reply_text:
+                    # Extract and track entities in background (non-blocking)
+                    if mapped_user:
+                        threading.Thread(
+                            target=email_service.extract_and_save_entities,
+                            args=(original_body, reply_text, mapped_user),
+                            daemon=True
+                        ).start()
+
+                    # Send the reply
+                    success = email_service.send_reply_email(
+                        settings=settings,
+                        to_email=original_sender,
+                        subject=original_subject,
+                        reply_text=reply_text,
+                        in_reply_to=None,  # We don't have message_id stored
+                        references=None,
+                        mapped_user=mapped_user,
+                        thread_id=thread_id
+                    )
+
+                    if success:
+                        logger.info(f"✅ Successfully retried and sent reply for thread_id={thread_id}")
+
+                        # Save assistant message to thread history
+                        if thread_id:
+                            email_service.save_thread_message(
+                                thread_id=thread_id,
+                                email_log_id=None,
+                                role='assistant',
+                                message=reply_text
+                            )
+
+                        # Update the original failed email log to mark it as retried
+                        conn = email_service.get_db_connection()
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                UPDATE email_logs
+                                SET error_message = error_message || ' [Retried successfully]'
+                                WHERE id = %s
+                            """, (email_log_id,))
+                        conn.commit()
+                    else:
+                        logger.error(f"❌ Retry failed: Could not send email for thread_id={thread_id}")
+                else:
+                    logger.error(f"❌ Retry failed: Ollama timeout for thread_id={thread_id}")
+
+            except Exception as e:
+                logger.error(f"Error in retry background task: {e}", exc_info=True)
+
+        threading.Thread(target=retry_in_background, daemon=True).start()
+
+        return jsonify({
+            'success': True,
+            'message': 'Retry started in background',
+            'thread_id': thread_id,
+            'email_log_id': email_log_id
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in retry endpoint: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 def run_service_loop():

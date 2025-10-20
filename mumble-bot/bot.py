@@ -447,7 +447,8 @@ class MumbleAIBot:
                 message=message,
                 role=role,
                 session_id=session_id,
-                message_type=message_type
+                message_type=message_type,
+                user_session=user_session
             )
             logger.debug(f"Saved {role} {message_type} message from {user_name} via MemoryManager")
             return True
@@ -1356,7 +1357,7 @@ JSON:"""
                             'num_predict': 500
                         }
                     },
-                    timeout=60  # 1 minute timeout for entity extraction
+                    timeout=300  # 5 minutes timeout for entity extraction
                 )
             except requests.exceptions.Timeout:
                 logger.warning("Entity extraction timeout, skipping")

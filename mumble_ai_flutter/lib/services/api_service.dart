@@ -2,6 +2,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'logging_service.dart';
 import '../utils/constants.dart';
+import '../models/entity.dart';
+import '../models/memory_status.dart';
+import '../models/memory_stats.dart';
+import '../models/consolidation_log.dart';
 
 class ApiService {
   static ApiService? _instance;
@@ -375,5 +379,151 @@ class ApiService {
     }
     
     return data;
+  }
+
+  // Memory System API Methods
+
+  /// Get memory system status
+  Future<MemoryStatus> getMemoryStatus() async {
+    try {
+      final response = await get(AppConstants.memoryStatusEndpoint);
+      return MemoryStatus.fromJson(response.data['data']);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Get entities with optional filtering
+  Future<Map<String, dynamic>> getEntities({
+    int page = 1,
+    int perPage = 20,
+    String? userName,
+    String? entityType,
+    String? search,
+  }) async {
+    final queryParams = <String, dynamic>{
+      'page': page,
+      'per_page': perPage,
+    };
+    
+    if (userName != null) queryParams['user_name'] = userName;
+    if (entityType != null) queryParams['entity_type'] = entityType;
+    if (search != null) queryParams['search'] = search;
+
+    final response = await get(AppConstants.memoryEntitiesEndpoint, queryParameters: queryParams);
+    return response.data;
+  }
+
+  /// Create a new entity
+  Future<Entity> createEntity({
+    required String entityText,
+    required String entityType,
+    required String userName,
+    String? contextInfo,
+    double confidence = 1.0,
+  }) async {
+    final data = {
+      'entity_text': entityText,
+      'entity_type': entityType,
+      'user_name': userName,
+      'context_info': contextInfo,
+      'confidence': confidence,
+    };
+
+    final response = await post(AppConstants.memoryEntitiesEndpoint, data: data);
+    return Entity.fromJson(response.data['data']);
+  }
+
+  /// Update an existing entity
+  Future<Entity> updateEntity(int id, {
+    String? entityText,
+    String? contextInfo,
+    double? confidence,
+  }) async {
+    final data = <String, dynamic>{};
+    if (entityText != null) data['entity_text'] = entityText;
+    if (contextInfo != null) data['context_info'] = contextInfo;
+    if (confidence != null) data['confidence'] = confidence;
+
+    final response = await put('${AppConstants.memoryEntitiesEndpoint}/$id', data: data);
+    return Entity.fromJson(response.data['data']);
+  }
+
+  /// Delete an entity
+  Future<void> deleteEntity(int id) async {
+    await delete('${AppConstants.memoryEntitiesEndpoint}/$id');
+  }
+
+  /// Search memories using hybrid search
+  Future<Map<String, dynamic>> searchMemories({
+    required String query,
+    int limit = 20,
+    String? userName,
+    String searchType = 'all',
+  }) async {
+    final queryParams = <String, dynamic>{
+      'q': query,
+      'limit': limit,
+      'search_type': searchType,
+    };
+    
+    if (userName != null) queryParams['user_name'] = userName;
+
+    final response = await get(AppConstants.memorySearchEndpoint, queryParameters: queryParams);
+    return response.data;
+  }
+
+  /// Get consolidation history and statistics
+  Future<ConsolidationSummary> getConsolidationHistory() async {
+    try {
+      final response = await get(AppConstants.memoryConsolidationEndpoint);
+      return ConsolidationSummary.fromJson(response.data['data']);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Trigger manual consolidation for a user
+  Future<Map<String, dynamic>> triggerConsolidation({
+    required String userName,
+    int cutoffDays = 7,
+  }) async {
+    final data = {
+      'user_name': userName,
+      'cutoff_days': cutoffDays,
+    };
+
+    final response = await post(AppConstants.memoryConsolidationRunEndpoint, data: data);
+    return response.data;
+  }
+
+  /// Get memory context for a user
+  Future<Map<String, dynamic>> getMemoryContext({
+    required String userName,
+    String? sessionId,
+    bool includeEntities = true,
+    bool includeConsolidated = true,
+    int limit = 10,
+  }) async {
+    final queryParams = <String, dynamic>{
+      'include_entities': includeEntities,
+      'include_consolidated': includeConsolidated,
+      'limit': limit,
+    };
+    
+    if (sessionId != null) queryParams['session_id'] = sessionId;
+
+    final response = await get('${AppConstants.memoryContextEndpoint}/$userName', queryParameters: queryParams);
+    return response.data;
+  }
+
+  /// Get memory system statistics
+  Future<MemoryStats> getMemoryStats() async {
+    try {
+      final response = await get(AppConstants.memoryStatsEndpoint);
+      return MemoryStats.fromJson(response.data['data']);
+    } catch (e) {
+      rethrow;
+    }
   }
 }

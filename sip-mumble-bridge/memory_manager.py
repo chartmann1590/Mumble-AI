@@ -433,7 +433,7 @@ class MemoryConsolidator:
             
             old_messages = cursor.fetchall()
             cursor.close()
-            db_pool.putconn(conn)
+            self.db_pool.putconn(conn)
             
             if not old_messages:
                 return {'messages_consolidated': 0, 'summaries_created': 0}
@@ -541,8 +541,8 @@ Summary:"""
             
             conn.commit()
             cursor.close()
-            db_pool.putconn(conn)
-            
+            self.db_pool.putconn(conn)
+
         except Exception as e:
             logger.error(f"Error marking messages as consolidated: {e}")
     
@@ -562,9 +562,9 @@ Summary:"""
                 
                 cursor.execute("SELECT DISTINCT user_name FROM conversation_history")
                 users = [row[0] for row in cursor.fetchall()]
-                
+
                 cursor.close()
-                db_pool.putconn(conn)
+                self.db_pool.putconn(conn)
                 
                 # Consolidate for each user
                 for user in users:
@@ -679,28 +679,28 @@ class MemoryManager:
         return None
     
     def store_message(self, user: str, message: str, role: str, session_id: str = None,
-                     message_type: str = 'text', importance_score: float = 0.5) -> bool:
+                     message_type: str = 'text', importance_score: float = 0.5, user_session: int = 0) -> bool:
         """Store message in all three layers"""
         try:
             # Generate embedding
             embedding = self.generate_embedding(message)
             if not embedding:
                 logger.warning("Failed to generate embedding, storing without vector")
-            
+
             # Store in PostgreSQL
             if not self.db_pool:
                 logger.error("Database pool not initialized")
                 return False
-                
+
             conn = self.db_pool.getconn()
             cursor = conn.cursor()
-            
+
             cursor.execute("""
-                INSERT INTO conversation_history 
-                (user_name, message, role, message_type, embedding, importance_score, session_id, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO conversation_history
+                (user_name, user_session, message, role, message_type, embedding, importance_score, session_id, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (user, message, role, message_type, embedding, importance_score, session_id, datetime.now()))
+            """, (user, user_session, message, role, message_type, embedding, importance_score, session_id, datetime.now()))
             
             message_id = cursor.fetchone()[0]
             conn.commit()

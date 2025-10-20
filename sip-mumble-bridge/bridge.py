@@ -617,7 +617,8 @@ class AIPipeline:
                 message=message,
                 role=role,
                 session_id=session_id,
-                message_type=message_type
+                message_type=message_type,
+                user_session=user_session
             )
             logger.debug(f"Saved {role} {message_type} message from {user_name} via MemoryManager in SIP bridge")
             return True
@@ -3859,8 +3860,8 @@ class SIPMumbleBridge:
             self.memory_manager = MemoryManager(
                 chromadb_url=os.getenv('CHROMADB_URL', 'http://chromadb:8000'),
                 redis_url=os.getenv('REDIS_URL', 'redis://redis:6379'),
-                db_pool=self.db_pool,
-                ollama_url=self.ollama_url
+                db_pool=self.pipeline.db_pool,
+                ollama_url=self.pipeline.ollama_url
             )
             logger.info("MemoryManager initialized successfully in SIP bridge")
         except Exception as e:

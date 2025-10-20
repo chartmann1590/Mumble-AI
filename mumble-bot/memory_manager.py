@@ -741,29 +741,29 @@ class MemoryManager:
     
     @db_retry(max_retries=3, delay=1, backoff=2)
     def store_message(self, user: str, message: str, role: str, session_id: str = None,
-                     message_type: str = 'text', importance_score: float = 0.5) -> bool:
+                     message_type: str = 'text', importance_score: float = 0.5, user_session: int = 0) -> bool:
         """Store message in all three layers"""
         try:
             # Check if database pool is available
             if not self.db_pool:
                 logger.error("Database pool not initialized")
                 return False
-                
+
             # Generate embedding
             embedding = self.generate_embedding(message)
             if not embedding:
                 logger.warning("Failed to generate embedding, storing without vector")
-            
+
             # Store in PostgreSQL
             conn = self.db_pool.getconn()
             cursor = conn.cursor()
-            
+
             cursor.execute("""
-                INSERT INTO conversation_history 
-                (user_name, message, role, message_type, embedding, importance_score, session_id, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO conversation_history
+                (user_name, user_session, message, role, message_type, embedding, importance_score, session_id, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (user, message, role, message_type, embedding, importance_score, session_id, datetime.now()))
+            """, (user, user_session, message, role, message_type, embedding, importance_score, session_id, datetime.now()))
             
             message_id = cursor.fetchone()[0]
             conn.commit()

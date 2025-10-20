@@ -381,9 +381,12 @@ CREATE INDEX IF NOT EXISTS idx_consolidation_user ON memory_consolidation_log(us
 CREATE INDEX IF NOT EXISTS idx_consolidation_date ON memory_consolidation_log(run_at DESC);
 
 -- Add columns to conversation_history for consolidation tracking
-ALTER TABLE conversation_history 
+ALTER TABLE conversation_history
 ADD COLUMN IF NOT EXISTS consolidated_at TIMESTAMP,
 ADD COLUMN IF NOT EXISTS consolidated_summary_id VARCHAR(255);
+
+-- Create index for consolidation tracking
+CREATE INDEX IF NOT EXISTS idx_conversation_consolidated ON conversation_history(consolidated_at) WHERE consolidated_at IS NULL;
 
 -- Add config entries for new memory system
 INSERT INTO bot_config (key, value) VALUES

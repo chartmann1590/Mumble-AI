@@ -49,6 +49,51 @@ class AppConstants {
   static const String retryEmailEndpoint = '/api/email/retry';
   static const String chatEndpoint = '/api/chat';
 
+  // Memory System API Endpoints
+  static const String memoryStatusEndpoint = '/api/memory/status';
+  static const String memoryEntitiesEndpoint = '/api/memory/entities';
+  static const String memorySearchEndpoint = '/api/memory/search';
+  static const String memoryConsolidationEndpoint = '/api/memory/consolidation';
+  static const String memoryConsolidationRunEndpoint = '/api/memory/consolidation/run';
+  static const String memoryContextEndpoint = '/api/memory/context';
+  static const String memoryStatsEndpoint = '/api/memory/stats';
+
+  // Entity Types
+  static const List<String> entityTypes = [
+    'PERSON',
+    'PLACE',
+    'ORGANIZATION',
+    'DATE',
+    'TIME',
+    'EVENT',
+    'OTHER',
+  ];
+
+  // Entity Type Display Names
+  static const Map<String, String> entityTypeDisplayNames = {
+    'PERSON': 'Person',
+    'PLACE': 'Place',
+    'ORGANIZATION': 'Organization',
+    'DATE': 'Date',
+    'TIME': 'Time',
+    'EVENT': 'Event',
+    'OTHER': 'Other',
+  };
+
+  // Search Types
+  static const List<String> searchTypes = [
+    'conversations',
+    'entities',
+    'all',
+  ];
+
+  // Search Type Display Names
+  static const Map<String, String> searchTypeDisplayNames = {
+    'conversations': 'Conversations',
+    'entities': 'Entities',
+    'all': 'All',
+  };
+
   // Default Values
   static const String defaultServerUrl = 'http://192.168.1.100:5002';
   static const int defaultTimeout = 10000; // 10 seconds

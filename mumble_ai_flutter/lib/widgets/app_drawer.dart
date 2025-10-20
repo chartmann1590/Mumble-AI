@@ -205,6 +205,12 @@ class AppDrawer extends StatelessWidget {
         'color': AppTheme.warningColor,
       },
       {
+        'title': 'Memory System',
+        'icon': Icons.psychology_outlined,
+        'route': '/memory-system',
+        'color': AppTheme.primaryColor,
+      },
+      {
         'title': 'Schedule',
         'icon': Icons.calendar_today,
         'route': '/schedule',
