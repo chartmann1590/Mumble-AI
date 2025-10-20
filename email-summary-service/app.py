@@ -65,7 +65,7 @@ class EmailSummaryService:
         self.last_check_date = None
         self.connect_db()
 
-    def call_ollama_with_retry(self, prompt: str, max_retries: int = 3, timeout: int = 180) -> Optional[str]:
+    def call_ollama_with_retry(self, prompt: str, max_retries: int = 3, timeout: int = 300) -> Optional[str]:
         """
         Call Ollama API with retry logic.
         
@@ -1764,7 +1764,7 @@ JSON:"""
                                 'num_predict': 500   # Limit response length
                             }
                         },
-                        timeout=180  # 3 minutes timeout for memory extraction
+                        timeout=300  # 5 minutes timeout for memory extraction
                     )
                     break  # Success, exit retry loop
                 except requests.exceptions.Timeout as e:
@@ -2522,7 +2522,7 @@ JSON:"""
                                 'num_predict': 500
                             }
                         },
-                        timeout=180  # 3 minutes timeout for memory extraction
+                        timeout=300  # 5 minutes timeout for memory extraction
                     )
                     break  # Success, exit retry loop
                 except requests.exceptions.Timeout as e:
@@ -3067,7 +3067,7 @@ User: "Do you know if I've got any meetings tomorrow?"
             logger.error(f"Error saving attachment {filename}: {e}")
             raise
 
-    def call_ollama_vision(self, image_base64: str, prompt: str, max_retries: int = 3, timeout: int = 600) -> Optional[str]:
+    def call_ollama_vision(self, image_base64: str, prompt: str, max_retries: int = 3, timeout: int = 300) -> Optional[str]:
         """Call Ollama vision model with retry logic"""
         try:
             # Get vision model from database
@@ -3499,6 +3499,339 @@ User: "Do you know if I've got any meetings tomorrow?"
             logger.error(f"Error getting schedule: {e}")
             return []
 
+    def extract_and_save_entities(self, user_message: str, assistant_response: str, user_name: str):
+        """Extract entities from email conversation and save to entity_mentions table"""
+        try:
+            # Get Ollama configuration
+            conn = self.get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_url'")
+                row = cursor.fetchone()
+                ollama_url = row[0] if row else OLLAMA_URL
+
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'memory_extraction_model'")
+                row = cursor.fetchone()
+                ollama_model = row[0] if row else 'qwen2.5:3b'
+
+            logger.info(f"Entity extraction using model: {ollama_model}")
+
+            # Prompt to extract entities
+            extraction_prompt = f"""Analyze this conversation and extract entities (people, places, organizations, dates, times, events).
+
+User: "{user_message}"
+Assistant: "{assistant_response}"
+
+Extract entities in the following categories:
+- PERSON: Names of people (e.g., "John Smith", "Dr. Johnson", "Mom")
+- PLACE: Locations, addresses, cities, buildings (e.g., "New York", "Central Hospital", "123 Main St")
+- ORGANIZATION: Companies, institutions, groups (e.g., "Microsoft", "City Council", "Red Cross")
+- DATE: Specific dates or date references (e.g., "next Monday", "October 15", "tomorrow")
+- TIME: Specific times (e.g., "3pm", "14:00", "noon")
+- EVENT: Named events or occasions (e.g., "Birthday party", "Annual conference", "Summer BBQ")
+- OTHER: Other relevant entities not fitting above categories
+
+Rules:
+1. Only extract explicitly mentioned entities
+2. Return empty array if no entities found
+3. Provide confidence score (0.0-1.0) for each entity
+4. Include surrounding context in context_info field
+5. Respond ONLY with valid JSON array
+
+Format:
+[
+  {{"entity_text": "John Smith", "entity_type": "PERSON", "confidence": 0.95, "context_info": "Meeting with John Smith"}},
+  {{"entity_text": "next Tuesday", "entity_type": "DATE", "confidence": 0.9, "context_info": "Appointment scheduled for next Tuesday"}}
+]
+
+JSON:"""
+
+            # Call Ollama with timeout
+            try:
+                response = requests.post(
+                    f"{ollama_url}/api/generate",
+                    json={
+                        'model': ollama_model,
+                        'prompt': extraction_prompt,
+                        'stream': False,
+                        'options': {
+                            'temperature': 0.2,
+                            'num_predict': 500
+                        }
+                    },
+                    timeout=300  # 5 minutes timeout for entity extraction
+                )
+            except requests.exceptions.Timeout:
+                logger.warning("Entity extraction timeout, skipping")
+                return
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Network error during entity extraction: {e}")
+                return
+
+            if response and response.status_code == 200:
+                result = response.json().get('response', '').strip()
+                logger.debug(f"Entity extraction raw response: {result[:200]}...")
+
+                # Parse JSON response
+                try:
+                    # Clean up response
+                    result = result.strip()
+                    if result.startswith('```json'):
+                        result = result[7:]
+                    if result.startswith('```'):
+                        result = result[3:]
+                    if result.endswith('```'):
+                        result = result[:-3]
+                    result = result.strip()
+
+                    entities = json.loads(result)
+
+                    if not isinstance(entities, list):
+                        logger.warning("Entity extraction did not return a list")
+                        return
+
+                    if len(entities) == 0:
+                        logger.debug("No entities extracted from conversation")
+                        return
+
+                    # Get the most recent message_id for linking
+                    conn = self.get_db_connection()
+                    with conn.cursor() as cursor:
+                        # Get most recent message ID for this user
+                        cursor.execute("""
+                            SELECT id FROM conversation_history
+                            WHERE user_name = %s
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                        """, (user_name,))
+
+                        message_row = cursor.fetchone()
+                        if not message_row:
+                            logger.warning(f"Could not find message for entity linking: {user_name}")
+                            return
+
+                        message_id = message_row[0]
+
+                        # Save each entity
+                        saved_count = 0
+                        for entity in entities:
+                            if not isinstance(entity, dict):
+                                continue
+
+                            entity_text = entity.get('entity_text', '').strip()
+                            entity_type = entity.get('entity_type', 'OTHER').upper()
+                            confidence = entity.get('confidence', 1.0)
+                            context_info = entity.get('context_info', '')
+
+                            if not entity_text:
+                                continue
+
+                            # Validate entity_type
+                            valid_types = ['PERSON', 'PLACE', 'ORGANIZATION', 'DATE', 'TIME', 'EVENT', 'OTHER']
+                            if entity_type not in valid_types:
+                                entity_type = 'OTHER'
+
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO entity_mentions
+                                    (user_name, entity_text, entity_type, message_id, confidence, context_info)
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (user_name, entity_text, entity_type, message_id, confidence, context_info))
+                                saved_count += 1
+                            except Exception as e:
+                                logger.error(f"Error saving entity {entity_text}: {e}")
+
+                        logger.info(f"Saved {saved_count} entities from email conversation with {user_name}")
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse entity extraction JSON: {e}")
+                except Exception as e:
+                    logger.error(f"Error processing entities: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error extracting entities: {e}", exc_info=True)
+
+    def consolidate_old_conversations(self, cutoff_days: int = 7, user_name: Optional[str] = None):
+        """
+        Consolidate old conversations into summaries to save tokens.
+
+        Args:
+            cutoff_days: Messages older than this many days will be consolidated
+            user_name: Optional - consolidate for specific user only
+        """
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            cutoff_date = datetime.now() - timedelta(days=cutoff_days)
+
+            # Get users with old messages to consolidate
+            if user_name:
+                user_filter = "AND user_name = %s"
+                user_params = [cutoff_date, user_name]
+            else:
+                user_filter = ""
+                user_params = [cutoff_date]
+
+            cursor.execute(f"""
+                SELECT DISTINCT user_name
+                FROM conversation_history
+                WHERE timestamp < %s
+                {user_filter}
+                AND role = 'user'
+            """, user_params)
+
+            users_to_consolidate = [row[0] for row in cursor.fetchall()]
+
+            if not users_to_consolidate:
+                logger.info("No old conversations to consolidate")
+                cursor.close()
+                return
+
+            logger.info(f"Starting consolidation for {len(users_to_consolidate)} users (cutoff: {cutoff_date})")
+
+            total_messages_consolidated = 0
+            total_summaries_created = 0
+            total_tokens_saved_estimate = 0
+
+            # Get Ollama configuration
+            with conn.cursor() as cursor2:
+                cursor2.execute("SELECT value FROM bot_config WHERE key = 'ollama_url'")
+                row = cursor2.fetchone()
+                ollama_url = row[0] if row else OLLAMA_URL
+
+                cursor2.execute("SELECT value FROM bot_config WHERE key = 'memory_extraction_model'")
+                row = cursor2.fetchone()
+                ollama_model = row[0] if row else 'qwen2.5:3b'
+
+            for user in users_to_consolidate:
+                try:
+                    # Get old messages for this user
+                    cursor.execute("""
+                        SELECT id, role, message, timestamp
+                        FROM conversation_history
+                        WHERE user_name = %s
+                        AND timestamp < %s
+                        ORDER BY timestamp ASC
+                    """, (user, cutoff_date))
+
+                    old_messages = cursor.fetchall()
+
+                    if len(old_messages) < 5:  # Don't consolidate if too few messages
+                        logger.debug(f"Skipping {user}: only {len(old_messages)} old messages")
+                        continue
+
+                    # Format conversation for summarization
+                    conversation_text = ""
+                    message_ids = []
+                    for msg_id, role, message, timestamp in old_messages:
+                        message_ids.append(msg_id)
+                        conversation_text += f"[{timestamp}] {role}: {message}\n"
+
+                    # Use Ollama to create summary
+                    summary_prompt = f"""Summarize this conversation history for user "{user}".
+Extract the key topics discussed, important facts mentioned, and any decisions or action items.
+Be concise but preserve critical information.
+
+Conversation:
+{conversation_text}
+
+Provide a structured summary in this format:
+- Main topics: [list]
+- Key facts: [list]
+- Important events/dates: [list]
+- Action items: [list]
+- Overall context: [brief description]
+
+Summary:"""
+
+                    logger.info(f"Consolidating {len(old_messages)} messages for {user} using model: {ollama_model}")
+
+                    try:
+                        response = requests.post(
+                            f"{ollama_url}/api/generate",
+                            json={
+                                'model': ollama_model,
+                                'prompt': summary_prompt,
+                                'stream': False,
+                                'options': {
+                                    'temperature': 0.3,
+                                    'num_predict': 1000
+                                }
+                            },
+                            timeout=300  # 5 minute timeout for consolidation
+                        )
+
+                        if response and response.status_code == 200:
+                            summary = response.json().get('response', '').strip()
+
+                            if summary:
+                                # Save summary as a persistent memory
+                                cursor.execute("""
+                                    INSERT INTO persistent_memories
+                                    (user_name, category, content, importance, active)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                """, (
+                                    user,
+                                    'consolidated_history',
+                                    f"Summary of conversations before {cutoff_date.date()}:\n{summary}",
+                                    7,  # Medium-high importance
+                                    True
+                                ))
+
+                                # Estimate tokens saved (rough estimate: 1 token ≈ 4 characters)
+                                original_tokens = len(conversation_text) // 4
+                                summary_tokens = len(summary) // 4
+                                tokens_saved = max(0, original_tokens - summary_tokens)
+
+                                # Delete or mark old messages as consolidated
+                                cursor.execute("""
+                                    DELETE FROM conversation_history
+                                    WHERE id = ANY(%s)
+                                """, (message_ids,))
+
+                                total_messages_consolidated += len(old_messages)
+                                total_summaries_created += 1
+                                total_tokens_saved_estimate += tokens_saved
+
+                                logger.info(f"Consolidated {len(old_messages)} messages for {user}, saved ~{tokens_saved} tokens")
+                            else:
+                                logger.warning(f"Empty summary for {user}, skipping consolidation")
+                        else:
+                            logger.error(f"Ollama error during consolidation for {user}: {response.status_code if response else 'No response'}")
+
+                    except requests.exceptions.Timeout:
+                        logger.warning(f"Consolidation timeout for {user}, skipping")
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"Network error during consolidation for {user}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Error consolidating for {user}: {e}", exc_info=True)
+
+            # Log consolidation run
+            if total_summaries_created > 0:
+                cursor.execute("""
+                    INSERT INTO memory_consolidation_log
+                    (user_name, messages_consolidated, summaries_created, tokens_saved_estimate, cutoff_date)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    user_name if user_name else 'all_users',
+                    total_messages_consolidated,
+                    total_summaries_created,
+                    total_tokens_saved_estimate,
+                    cutoff_date.date()
+                ))
+
+                conn.commit()
+                logger.info(f"Consolidation complete: {total_messages_consolidated} messages → {total_summaries_created} summaries, ~{total_tokens_saved_estimate} tokens saved")
+            else:
+                logger.info("No consolidation performed")
+
+            cursor.close()
+
+        except Exception as e:
+            logger.error(f"Error in consolidate_old_conversations: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+
     def generate_ai_reply(self, sender: str, subject: str, body: str, settings: Dict,
                           thread_id: int = None, attachments_analysis: List[Dict] = None) -> str:
         """Generate AI reply to email using Ollama with full context (thread history, memories, schedule, persona, attachments)"""
@@ -3824,7 +4157,7 @@ MESSAGE: {body}
 Your reply (brief and direct):"""
 
             # Use retry logic for Ollama call - longer timeout if attachments present
-            timeout = 600 if attachments_analysis else 180  # 10 min for attachments, 3 min for regular
+            timeout = 300 if attachments_analysis else 300  # 5 min for both attachments and regular
             reply_text = self.call_ollama_with_retry(reply_prompt, max_retries=3, timeout=timeout)
 
             if reply_text:
@@ -4567,6 +4900,14 @@ Manage your schedule at http://localhost:5002/schedule
                         thread_id=thread_id,
                         attachments_analysis=attachments_analysis
                     )
+
+                    # Extract and track entities in background (non-blocking)
+                    if reply_text and mapped_user:
+                        threading.Thread(
+                            target=self.extract_and_save_entities,
+                            args=(body, reply_text, mapped_user),
+                            daemon=True
+                        ).start()
 
                     if reply_text:
                         # Send reply (will be logged inside send_reply_email)

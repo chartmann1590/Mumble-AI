@@ -148,6 +148,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
     ports:
       - "5002:5002"
     environment:
@@ -156,6 +160,8 @@ services:
       - DB_NAME=${POSTGRES_DB:-mumble_ai}
       - DB_USER=${POSTGRES_USER:-mumbleai}
       - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      - REDIS_URL=redis://redis:6379
+      - CHROMADB_URL=http://chromadb:8000
     volumes:
       - piper-voices:/app/piper_voices
     restart: unless-stopped
@@ -176,6 +182,10 @@ services:
         condition: service_started
       piper-tts:
         condition: service_started
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
     ports:
       - "8082:8080"  # Health check port
     environment:
@@ -203,6 +213,9 @@ services:
       - WHISPER_CIRCUIT_TIMEOUT=${WHISPER_CIRCUIT_TIMEOUT:-60.0}
       - PIPER_CIRCUIT_THRESHOLD=${PIPER_CIRCUIT_THRESHOLD:-5}
       - PIPER_CIRCUIT_TIMEOUT=${PIPER_CIRCUIT_TIMEOUT:-60.0}
+      - CHROMADB_URL=http://chromadb:8000
+      - REDIS_URL=redis://redis:6379
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
       - OLLAMA_CIRCUIT_THRESHOLD=${OLLAMA_CIRCUIT_THRESHOLD:-5}
       - OLLAMA_CIRCUIT_TIMEOUT=${OLLAMA_CIRCUIT_TIMEOUT:-60.0}
       - DB_CIRCUIT_THRESHOLD=${DB_CIRCUIT_THRESHOLD:-3}
@@ -230,6 +243,10 @@ services:
     depends_on:
       mumble-server:
         condition: service_started
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
@@ -253,6 +270,9 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama2}
       - LOG_LEVEL=DEBUG
+      - CHROMADB_URL=http://chromadb:8000
+      - REDIS_URL=redis://redis:6379
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -368,6 +388,42 @@ services:
       retries: 3
       start_period: 10s
 
+  redis:
+    image: redis:7-alpine
+    container_name: mumble-ai-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - mumble-ai-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:0.5.0
+    container_name: mumble-ai-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - mumble-ai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
 networks:
   mumble-ai-network:
     driver: bridge
@@ -379,3 +435,5 @@ volumes:
   silero-models:
   chatterbox-models:
   cloned-voices:
+  redis-data:
+  chromadb-data:

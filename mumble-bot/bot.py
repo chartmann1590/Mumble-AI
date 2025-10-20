@@ -22,6 +22,9 @@ from typing import Optional, Callable, Any, Tuple, List, Dict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+# Import the new memory manager
+from memory_manager import MemoryManager
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -327,6 +330,9 @@ class MumbleAIBot:
         # Initialize smart cache system for performance
         self.smart_cache = SmartCache()
         
+        # Memory manager will be initialized after database pool is ready
+        self.memory_manager = None
+        
         # Error handling and retry configuration
         self.retry_config = RetryConfig(
             max_attempts=int(os.getenv('RETRY_MAX_ATTEMPTS', '3')),
@@ -423,14 +429,37 @@ class MumbleAIBot:
                 logger.error(f"Error releasing database connection: {e}")
 
     def save_message(self, user_name, user_session, message_type, role, message, session_id=None):
-        """Save a message to the conversation history asynchronously (non-blocking)"""
-        # Run DB write in background thread to avoid blocking the main pipeline
-        threading.Thread(
-            target=self._save_message_sync,
-            args=(user_name, user_session, message_type, role, message, session_id),
-            daemon=True
-        ).start()
-        return True
+        """Save a message using MemoryManager (non-blocking)"""
+        if not self.memory_manager:
+            logger.warning("MemoryManager not available, falling back to old method")
+            # Fallback to old method
+            threading.Thread(
+                target=self._save_message_sync,
+                args=(user_name, user_session, message_type, role, message, session_id),
+                daemon=True
+            ).start()
+            return True
+        
+        # Use MemoryManager to store message
+        try:
+            self.memory_manager.store_message(
+                user=user_name,
+                message=message,
+                role=role,
+                session_id=session_id,
+                message_type=message_type
+            )
+            logger.debug(f"Saved {role} {message_type} message from {user_name} via MemoryManager")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving message via MemoryManager: {e}")
+            # Fallback to old method
+            threading.Thread(
+                target=self._save_message_sync,
+                args=(user_name, user_session, message_type, role, message, session_id),
+                daemon=True
+            ).start()
+            return True
 
     def _save_message_sync(self, user_name, user_session, message_type, role, message, session_id=None):
         """Internal synchronous save method run in background thread"""
@@ -683,6 +712,13 @@ class MumbleAIBot:
                 args=(message, response_text, sender_name),
                 daemon=True
             ).start()
+            
+            # Extract and track entities in background (non-blocking)
+            threading.Thread(
+                target=self.extract_and_save_entities,
+                args=(message, response_text, sender_name, session_id),
+                daemon=True
+            ).start()
 
             # Send text-only response (no TTS for text messages)
             self.mumble.my_channel().send_text_message(response_text)
@@ -757,6 +793,13 @@ class MumbleAIBot:
                 args=(transcript, response_text, user_name),
                 daemon=True
             ).start()
+            
+            # Extract and track entities in background (non-blocking)
+            threading.Thread(
+                target=self.extract_and_save_entities,
+                args=(transcript, response_text, user_name, session_id),
+                daemon=True
+            ).start()
 
             # Synthesize speech
             logger.info("Synthesizing speech...")
@@ -799,7 +842,7 @@ class MumbleAIBot:
 
         files = {'audio': ('audio.wav', audio_data, 'audio/wav')}
         data = {'language': language}
-        response = requests.post(f"{self.whisper_url}/transcribe", files=files, data=data, timeout=30)
+        response = requests.post(f"{self.whisper_url}/transcribe", files=files, data=data, timeout=300)
 
         if response.status_code == 200:
             return response.json().get('text', '')
@@ -1262,6 +1305,348 @@ JSON:"""
 
         except Exception as e:
             logger.error(f"Error extracting memory: {e}", exc_info=True)
+
+    def extract_and_save_entities(self, user_message: str, assistant_response: str, user_name: str, session_id: str):
+        """Extract entities from conversation and save to entity_mentions table"""
+        try:
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('memory_extraction_model', 'qwen2.5:3b')
+            logger.info(f"Entity extraction using model: {ollama_model}")
+
+            # Prompt to extract entities
+            extraction_prompt = f"""Analyze this conversation and extract entities (people, places, organizations, dates, times, events).
+
+User: "{user_message}"
+Assistant: "{assistant_response}"
+
+Extract entities in the following categories:
+- PERSON: Names of people (e.g., "John Smith", "Dr. Johnson", "Mom")
+- PLACE: Locations, addresses, cities, buildings (e.g., "New York", "Central Hospital", "123 Main St")
+- ORGANIZATION: Companies, institutions, groups (e.g., "Microsoft", "City Council", "Red Cross")
+- DATE: Specific dates or date references (e.g., "next Monday", "October 15", "tomorrow")
+- TIME: Specific times (e.g., "3pm", "14:00", "noon")
+- EVENT: Named events or occasions (e.g., "Birthday party", "Annual conference", "Summer BBQ")
+- OTHER: Other relevant entities not fitting above categories
+
+Rules:
+1. Only extract explicitly mentioned entities
+2. Return empty array if no entities found
+3. Provide confidence score (0.0-1.0) for each entity
+4. Include surrounding context in context_info field
+5. Respond ONLY with valid JSON array
+
+Format:
+[
+  {{"entity_text": "John Smith", "entity_type": "PERSON", "confidence": 0.95, "context_info": "Meeting with John Smith"}},
+  {{"entity_text": "next Tuesday", "entity_type": "DATE", "confidence": 0.9, "context_info": "Appointment scheduled for next Tuesday"}}
+]
+
+JSON:"""
+
+            # Call Ollama with timeout
+            try:
+                response = requests.post(
+                    f"{ollama_url}/api/generate",
+                    json={
+                        'model': ollama_model,
+                        'prompt': extraction_prompt,
+                        'stream': False,
+                        'options': {
+                            'temperature': 0.2,
+                            'num_predict': 500
+                        }
+                    },
+                    timeout=60  # 1 minute timeout for entity extraction
+                )
+            except requests.exceptions.Timeout:
+                logger.warning("Entity extraction timeout, skipping")
+                return
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Network error during entity extraction: {e}")
+                return
+
+            if response and response.status_code == 200:
+                result = response.json().get('response', '').strip()
+                logger.debug(f"Entity extraction raw response: {result[:200]}...")
+
+                # Parse JSON response
+                try:
+                    # Clean up response
+                    result = result.strip()
+                    if result.startswith('```json'):
+                        result = result[7:]
+                    if result.startswith('```'):
+                        result = result[3:]
+                    if result.endswith('```'):
+                        result = result[:-3]
+                    result = result.strip()
+
+                    entities = json.loads(result)
+
+                    if not isinstance(entities, list):
+                        logger.warning("Entity extraction did not return a list")
+                        return
+
+                    if len(entities) == 0:
+                        logger.debug("No entities extracted from conversation")
+                        return
+
+                    # Get the message_id for linking
+                    conn = None
+                    try:
+                        conn = self.get_db_connection()
+                        if not conn:
+                            logger.warning("Cannot save entities: database connection unavailable")
+                            return
+
+                        cursor = conn.cursor()
+
+                        # Get most recent message ID for this user/session
+                        cursor.execute("""
+                            SELECT id FROM conversation_history
+                            WHERE user_name = %s AND session_id = %s
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                        """, (user_name, session_id))
+
+                        message_row = cursor.fetchone()
+                        if not message_row:
+                            logger.warning(f"Could not find message for entity linking: {user_name}/{session_id}")
+                            cursor.close()
+                            return
+
+                        message_id = message_row[0]
+
+                        # Save each entity
+                        saved_count = 0
+                        for entity in entities:
+                            if not isinstance(entity, dict):
+                                continue
+
+                            entity_text = entity.get('entity_text', '').strip()
+                            entity_type = entity.get('entity_type', 'OTHER').upper()
+                            confidence = entity.get('confidence', 1.0)
+                            context_info = entity.get('context_info', '')
+
+                            if not entity_text:
+                                continue
+
+                            # Validate entity_type
+                            valid_types = ['PERSON', 'PLACE', 'ORGANIZATION', 'DATE', 'TIME', 'EVENT', 'OTHER']
+                            if entity_type not in valid_types:
+                                entity_type = 'OTHER'
+
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO entity_mentions
+                                    (user_name, entity_text, entity_type, message_id, confidence, context_info)
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (user_name, entity_text, entity_type, message_id, confidence, context_info))
+                                saved_count += 1
+                            except Exception as e:
+                                logger.error(f"Error saving entity {entity_text}: {e}")
+
+                        conn.commit()
+                        cursor.close()
+                        logger.info(f"Saved {saved_count} entities from conversation with {user_name}")
+
+                    except Exception as e:
+                        logger.error(f"Database error saving entities: {e}")
+                        if conn:
+                            conn.rollback()
+                    finally:
+                        if conn:
+                            self.release_db_connection(conn)
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse entity extraction JSON: {e}")
+                except Exception as e:
+                    logger.error(f"Error processing entities: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error extracting entities: {e}", exc_info=True)
+
+    def consolidate_old_conversations(self, cutoff_days: int = 7, user_name: Optional[str] = None):
+        """
+        Consolidate old conversations into summaries to save tokens.
+
+        Args:
+            cutoff_days: Messages older than this many days will be consolidated
+            user_name: Optional - consolidate for specific user only
+        """
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                logger.warning("Cannot consolidate: database connection unavailable")
+                return
+
+            cursor = conn.cursor()
+            cutoff_date = datetime.now() - timedelta(days=cutoff_days)
+
+            # Get users with old messages to consolidate
+            if user_name:
+                user_filter = "AND user_name = %s"
+                user_params = [cutoff_date, user_name]
+            else:
+                user_filter = ""
+                user_params = [cutoff_date]
+
+            cursor.execute(f"""
+                SELECT DISTINCT user_name
+                FROM conversation_history
+                WHERE timestamp < %s
+                {user_filter}
+                AND role = 'user'
+            """, user_params)
+
+            users_to_consolidate = [row[0] for row in cursor.fetchall()]
+
+            if not users_to_consolidate:
+                logger.info("No old conversations to consolidate")
+                cursor.close()
+                return
+
+            logger.info(f"Starting consolidation for {len(users_to_consolidate)} users (cutoff: {cutoff_date})")
+
+            total_messages_consolidated = 0
+            total_summaries_created = 0
+            total_tokens_saved_estimate = 0
+
+            ollama_url = self.get_config('ollama_url', self.ollama_url)
+            ollama_model = self.get_config('memory_extraction_model', 'qwen2.5:3b')
+
+            for user in users_to_consolidate:
+                try:
+                    # Get old messages for this user
+                    cursor.execute("""
+                        SELECT id, role, message, timestamp
+                        FROM conversation_history
+                        WHERE user_name = %s
+                        AND timestamp < %s
+                        ORDER BY timestamp ASC
+                    """, (user, cutoff_date))
+
+                    old_messages = cursor.fetchall()
+
+                    if len(old_messages) < 5:  # Don't consolidate if too few messages
+                        logger.debug(f"Skipping {user}: only {len(old_messages)} old messages")
+                        continue
+
+                    # Format conversation for summarization
+                    conversation_text = ""
+                    message_ids = []
+                    for msg_id, role, message, timestamp in old_messages:
+                        message_ids.append(msg_id)
+                        conversation_text += f"[{timestamp}] {role}: {message}\n"
+
+                    # Use Ollama to create summary
+                    summary_prompt = f"""Summarize this conversation history for user "{user}".
+Extract the key topics discussed, important facts mentioned, and any decisions or action items.
+Be concise but preserve critical information.
+
+Conversation:
+{conversation_text}
+
+Provide a structured summary in this format:
+- Main topics: [list]
+- Key facts: [list]
+- Important events/dates: [list]
+- Action items: [list]
+- Overall context: [brief description]
+
+Summary:"""
+
+                    logger.info(f"Consolidating {len(old_messages)} messages for {user} using model: {ollama_model}")
+
+                    try:
+                        response = requests.post(
+                            f"{ollama_url}/api/generate",
+                            json={
+                                'model': ollama_model,
+                                'prompt': summary_prompt,
+                                'stream': False,
+                                'options': {
+                                    'temperature': 0.3,
+                                    'num_predict': 1000
+                                }
+                            },
+                            timeout=300  # 5 minute timeout for consolidation
+                        )
+
+                        if response and response.status_code == 200:
+                            summary = response.json().get('response', '').strip()
+
+                            if summary:
+                                # Save summary as a persistent memory
+                                cursor.execute("""
+                                    INSERT INTO persistent_memories
+                                    (user_name, category, content, importance, active)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                """, (
+                                    user,
+                                    'consolidated_history',
+                                    f"Summary of conversations before {cutoff_date.date()}:\n{summary}",
+                                    7,  # Medium-high importance
+                                    True
+                                ))
+
+                                # Estimate tokens saved (rough estimate: 1 token ≈ 4 characters)
+                                original_tokens = len(conversation_text) // 4
+                                summary_tokens = len(summary) // 4
+                                tokens_saved = max(0, original_tokens - summary_tokens)
+
+                                # Delete or mark old messages as consolidated
+                                cursor.execute("""
+                                    DELETE FROM conversation_history
+                                    WHERE id = ANY(%s)
+                                """, (message_ids,))
+
+                                total_messages_consolidated += len(old_messages)
+                                total_summaries_created += 1
+                                total_tokens_saved_estimate += tokens_saved
+
+                                logger.info(f"Consolidated {len(old_messages)} messages for {user}, saved ~{tokens_saved} tokens")
+                            else:
+                                logger.warning(f"Empty summary for {user}, skipping consolidation")
+                        else:
+                            logger.error(f"Ollama error during consolidation for {user}: {response.status_code if response else 'No response'}")
+
+                    except requests.exceptions.Timeout:
+                        logger.warning(f"Consolidation timeout for {user}, skipping")
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"Network error during consolidation for {user}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Error consolidating for {user}: {e}", exc_info=True)
+
+            # Log consolidation run
+            if total_summaries_created > 0:
+                cursor.execute("""
+                    INSERT INTO memory_consolidation_log
+                    (user_name, messages_consolidated, summaries_created, tokens_saved_estimate, cutoff_date)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    user_name if user_name else 'all_users',
+                    total_messages_consolidated,
+                    total_summaries_created,
+                    total_tokens_saved_estimate,
+                    cutoff_date.date()
+                ))
+
+                conn.commit()
+                logger.info(f"Consolidation complete: {total_messages_consolidated} messages → {total_summaries_created} summaries, ~{total_tokens_saved_estimate} tokens saved")
+            else:
+                logger.info("No consolidation performed")
+
+            cursor.close()
+
+        except Exception as e:
+            logger.error(f"Error in consolidate_old_conversations: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                self.release_db_connection(conn)
 
     def _normalize_null_values(self, memories: List[Dict]) -> List[Dict]:
         """Convert string 'null' to actual None in memory objects"""
@@ -2710,7 +3095,7 @@ Reason: [brief explanation]"""
                         'num_predict': 100
                     }
                 },
-                timeout=60  # 1 minute for validation
+                timeout=300  # 5 minutes for validation
             )
 
             if validation_response.status_code == 200:
@@ -2857,7 +3242,7 @@ Then briefly explain why in 5 words or less."""
                         'num_predict': 20
                     }
                 },
-                timeout=30
+                timeout=300
             )
             
             if response.status_code == 200:
@@ -2961,9 +3346,12 @@ Then briefly explain why in 5 words or less."""
                 """
                 UPDATE conversation_history 
                 SET topic_state = %s, topic_summary = %s
-                WHERE user_name = %s AND session_id = %s
-                ORDER BY timestamp DESC
-                LIMIT 1
+                WHERE id = (
+                    SELECT id FROM conversation_history
+                    WHERE user_name = %s AND session_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                )
                 """,
                 (topic_state, topic_summary, user_name, session_id)
             )
@@ -3039,60 +3427,30 @@ Then briefly explain why in 5 words or less."""
             return "general"
 
     def build_prompt_with_context(self, current_message, user_name=None, session_id=None):
-        """Build a prompt with short-term (current session) and long-term (semantic) memory, with intelligent context selection"""
+        """Build a prompt with smart memory system using MemoryManager"""
         try:
-            # Detect query complexity for adaptive prompting
-            complexity = self.analyze_query_complexity(current_message)
-            use_chain_of_thought = self.get_config('use_chain_of_thought', 'false').lower() == 'true'
-            use_semantic_ranking = self.get_config('use_semantic_memory_ranking', 'true').lower() == 'true'
-
-            # Detect if this is a schedule-related query
-            is_schedule_related = self.is_schedule_query(current_message)
-            is_event_name_query = self.is_event_name_query(current_message) if is_schedule_related else False
-            date_context = self.extract_date_context(current_message) if is_schedule_related else None
-
-            logger.debug(f"Query complexity: {complexity}, CoT: {use_chain_of_thought}, Semantic ranking: {use_semantic_ranking}, Schedule query: {is_schedule_related}, Event name query: {is_event_name_query}, Date context: {date_context}")
+            # If memory manager is not available, fall back to simple prompt
+            if not self.memory_manager:
+                logger.warning("MemoryManager not available, using fallback prompt")
+                return f"User: {current_message}\nYou:"
             
-            # Get bot persona from config
-            persona = self.get_config('bot_persona', '')
-
-            # Get memory limits from config (now defaulting to 10 instead of 3)
-            short_term_limit = int(self.get_config('short_term_memory_limit', '10'))
-            long_term_limit = int(self.get_config('long_term_memory_limit', '10'))
-
-            # Build the full prompt
-            full_prompt = ""
-
             # Get current date and time in New York timezone
             ny_tz = ZoneInfo("America/New_York")
             current_datetime = datetime.now(ny_tz)
             current_date_str = current_datetime.strftime("%A, %B %d, %Y")
             current_time_str = current_datetime.strftime("%I:%M %p %Z")
-
-            # Add chain-of-thought prefix for complex queries
-            if use_chain_of_thought and complexity == 'complex':
-                full_prompt += f"""COMPLEX QUERY DETECTED - Use step-by-step reasoning:
-
-Question: {current_message}
-
-Before answering, think through:
-1. What information do I need to answer accurately?
-2. What relevant memories or schedule items should I check?
-3. What's the most helpful way to respond?
-
-"""
+            
+            # Get bot persona from config
+            persona = self.get_config('bot_persona', '')
+            
+            # Build the full prompt
+            full_prompt = ""
 
             # Add system instructions with anti-repetition and anti-hallucination guidance
             full_prompt += f"""You are having a natural, flowing conversation. CRITICAL RULES - FOLLOW EXACTLY:
 
 CURRENT DATE AND TIME (New York): {current_date_str} at {current_time_str}
 Use this information when answering questions about scheduling, planning, or time-sensitive topics.
-
-SCHEDULING CAPABILITIES:
-- You can access the user's calendar/schedule automatically
-- When users mention events, appointments, or plans, they are AUTOMATICALLY saved to their schedule
-- You can answer questions about upcoming events using the schedule shown below
-- Users can ask "What's on my schedule?", "Do I have anything tomorrow?", etc.
 
 1. BREVITY: Keep responses to 1-2 short sentences maximum. Be conversational but concise.
 2. TRUTH: NEVER make up information. If you don't know something, say "I don't know" or "I'm not sure."
@@ -3106,286 +3464,106 @@ SCHEDULING CAPABILITIES:
 
 """
 
-            # Add topic state awareness
-            if user_name and session_id:
-                session_key = f"{user_name}_{session_id}"
-                active_topic = self.active_topics.get(session_key)
-                resolved_topics = self.resolved_topics.get(session_key, [])
-                
-                # Check if this is a closure message
-                closure_detected, closure_type = self.detect_conversation_closure(current_message, user_name, session_id)
-                if closure_detected:
-                    full_prompt += "IMPORTANT: The user is expressing gratitude/acknowledgment. The previous topic has been RESOLVED. Respond warmly and briefly, then be ready for a new topic.\n\n"
-                
-                # Show recently resolved topics (don't bring these up unless asked)
-                if resolved_topics:
-                    full_prompt += "RECENTLY RESOLVED TOPICS (don't bring these up unless asked):\n"
-                    for topic_info in resolved_topics[-3:]:  # Last 3 resolved topics
-                        full_prompt += f"- {topic_info['topic']}\n"
-                    full_prompt += "\n"
-
-            # Add persona if configured (but subordinate to truthfulness)
+            # Add persona if configured
             if persona and persona.strip():
                 full_prompt += f"Your personality/character: {persona.strip()}\n\n"
-                full_prompt += "IMPORTANT: Stay in character BUT prioritize truthfulness over role-playing. "
-                full_prompt += "If you don't have information, admit it rather than making something up to fit your character.\n\n"
+                full_prompt += "IMPORTANT: Stay in character BUT prioritize truthfulness over role-playing.\n\n"
 
-            # Get persistent memories and schedule events (with parallel processing when enabled)
-            persistent_memories = []
-            schedule_events = []
+            # Check if this is a schedule-related query
+            schedule_keywords = ['schedule', 'calendar', 'appointment', 'event', 'meeting', 'plan', 'busy', 'free', 'available', 'when', 'what\'s on', 'coming up', 'today', 'tomorrow', 'this week', 'next week']
+            is_schedule_query = any(keyword in current_message.lower() for keyword in schedule_keywords)
             
-            if user_name:
-                enable_parallel = self.get_config('enable_parallel_processing', 'true').lower() == 'true'
-                
-                if enable_parallel:
-                    # Fetch memories and schedule in parallel for better performance
-                    def fetch_memories():
-                        if use_semantic_ranking:
-                            return self.get_relevant_memories(current_message, user_name, top_k=10)
-                        else:
-                            return self.get_persistent_memories(user_name, limit=10)
+            # Add schedule information if this is a schedule-related query
+            if is_schedule_query and user_name:
+                try:
+                    # Get today's date and 14 days ahead
+                    today = current_datetime.date()
+                    end_date = today + timedelta(days=14)
                     
-                    def fetch_schedule():
-                        cached_schedule = self.smart_cache.get_cached_schedule(user_name)
-                        if cached_schedule is not None:
-                            return cached_schedule
-                        else:
-                            from datetime import timedelta
-                            end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
-                            events = self.get_schedule_events(
-                                user_name=user_name,
-                                start_date=current_datetime.strftime('%Y-%m-%d'),
-                                end_date=end_date,
-                                limit=20
-                            )
-                            self.smart_cache.cache_schedule(user_name, events)
-                            return events
+                    # Retrieve schedule events
+                    schedule_events = self.get_schedule_events(
+                        user_name=user_name,
+                        start_date=today.strftime('%Y-%m-%d'),
+                        end_date=end_date.strftime('%Y-%m-%d'),
+                        limit=50
+                    )
                     
-                    # Execute in parallel
-                    with ThreadPoolExecutor(max_workers=2) as executor:
-                        memory_future = executor.submit(fetch_memories)
-                        schedule_future = executor.submit(fetch_schedule)
+                    if schedule_events:
+                        full_prompt += "SCHEDULE INFORMATION:\n"
+                        for event in schedule_events:
+                            event_date = event['event_date']
+                            event_time = event['event_time']
+                            title = event['title']
+                            description = event['description'] or ''
+                            
+                            # Format the event
+                            if event_time:
+                                time_str = event_time.strftime('%I:%M %p') if hasattr(event_time, 'strftime') else str(event_time)
+                                full_prompt += f"- {event_date} at {time_str}: {title}"
+                            else:
+                                full_prompt += f"- {event_date}: {title}"
+                            
+                            if description:
+                                full_prompt += f" ({description})"
+                            full_prompt += "\n"
+                        full_prompt += "\n"
+                    else:
+                        full_prompt += "SCHEDULE INFORMATION: No upcoming events found.\n\n"
                         
-                        persistent_memories = memory_future.result()
-                        schedule_events = schedule_future.result()
-                    
-                    logger.info(f"Retrieved {len(persistent_memories)} memories and {len(schedule_events)} events (parallel)")
-                else:
-                    # Sequential fetching (original behavior)
-                    if use_semantic_ranking:
-                        persistent_memories = self.get_relevant_memories(current_message, user_name, top_k=10)
-                        logger.info(f"Retrieved {len(persistent_memories)} relevant memories using semantic ranking")
-                    else:
-                        persistent_memories = self.get_persistent_memories(user_name, limit=10)
-                        logger.info(f"Retrieved {len(persistent_memories)} persistent memories")
-                    
-                    # Check cache first
-                    cached_schedule = self.smart_cache.get_cached_schedule(user_name)
-                    if cached_schedule is not None:
-                        schedule_events = cached_schedule
-                        logger.debug(f"Using cached schedule for {user_name}")
-                    else:
-                        from datetime import timedelta
-                        end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
-                        schedule_events = self.get_schedule_events(
-                            user_name=user_name,
-                            start_date=current_datetime.strftime('%Y-%m-%d'),
-                            end_date=end_date,
-                            limit=20
-                        )
-                        self.smart_cache.cache_schedule(user_name, schedule_events)
-                        logger.info(f"Retrieved {len(schedule_events)} schedule events")
+                except Exception as e:
+                    logger.error(f"Error retrieving schedule events: {e}")
+                    full_prompt += "SCHEDULE INFORMATION: Unable to retrieve schedule at this time.\n\n"
 
-            # Add schedule events to context - ONLY when user asks about schedule
-            if is_schedule_related and schedule_events:
-                # Check if this is an event name query and use search if so
-                if is_event_name_query:
-                    try:
-                        # Use three-tier search for event name queries
-                        from datetime import timedelta
-                        end_date = (current_datetime + timedelta(days=30)).strftime('%Y-%m-%d')
-                        search_results = self.search_schedule_by_title(
-                            user_name=user_name,
-                            search_query=current_message,
-                            start_date=current_datetime.strftime('%Y-%m-%d'),
-                            end_date=end_date,
-                            timeout=300,
-                            max_retries=3
-                        )
-                        filtered_events = search_results
-                        time_range = "SEARCH RESULTS"
-                        logger.info(f"Event name search found {len(filtered_events)} results for '{current_message}'")
-                    except Exception as e:
-                        logger.error(f"Event name search failed: {e}")
-                        # Fallback to regular filtering
-                        filtered_events = schedule_events
-                        time_range = "UPCOMING"
-                else:
-                    # Regular date-based and keyword filtering for non-event-name queries
-                    from datetime import timedelta
-                    text_lower = current_message.lower()
-                    filtered_events = schedule_events  # Default to all events
-                    time_range = "UPCOMING"
-
-                    # First: Apply keyword filtering if specific event types are mentioned
-                    keyword_categories = {
-                        'travel': ['travel', 'trip', 'flight', 'vacation', 'journey', 'fly', 'flying', 'depart', 'return', 'arrive', 'airport'],
-                        'appointment': ['appointment', 'doctor', 'dentist', 'checkup', 'medical', 'clinic', 'hospital'],
-                        'meeting': ['meeting', 'call', 'conference', 'zoom', 'presentation'],
-                        'event': ['party', 'celebration', 'birthday', 'shower', 'wedding', 'anniversary'],
-                    }
-
-                    for category, keywords in keyword_categories.items():
-                        if any(kw in text_lower for kw in keywords):
-                            # Filter events that match these keywords
-                            filtered_events = [
-                                e for e in schedule_events
-                                if any(kw in (e['title'] or '').lower() or kw in (e['description'] or '').lower()
-                                      for kw in keywords)
-                            ]
-                            if filtered_events:
-                                time_range = f"{category.upper()}"
-                                logger.info(f"Filtered {len(filtered_events)} events by keyword category: {category}")
-                                break
-
-                    # Second: Apply month filtering if specific month is mentioned
-                    month_filtered = False
-                    
-                    # Relative month filtering
-                    if 'this month' in text_lower:
-                        current_month = current_datetime.month
-                        current_year = current_datetime.year
-                        filtered_events = [
-                            e for e in filtered_events
-                            if e['event_date'].month == current_month and e['event_date'].year == current_year
-                        ]
-                        time_range = "THIS MONTH"
-                        logger.info(f"Filtered {len(filtered_events)} events for this month")
-                        month_filtered = True
-                    elif 'next month' in text_lower:
-                        next_month_date = current_datetime.replace(day=1) + timedelta(days=32)
-                        next_month = next_month_date.month
-                        next_year = next_month_date.year
-                        filtered_events = [
-                            e for e in filtered_events
-                            if e['event_date'].month == next_month and e['event_date'].year == next_year
-                        ]
-                        time_range = "NEXT MONTH"
-                        logger.info(f"Filtered {len(filtered_events)} events for next month")
-                        month_filtered = True
-                    elif 'this quarter' in text_lower:
-                        current_quarter = (current_datetime.month - 1) // 3 + 1
-                        quarter_start_month = (current_quarter - 1) * 3 + 1
-                        quarter_end_month = current_quarter * 3
-                        filtered_events = [
-                            e for e in filtered_events
-                            if quarter_start_month <= e['event_date'].month <= quarter_end_month
-                            and e['event_date'].year == current_datetime.year
-                        ]
-                        time_range = f"Q{current_quarter}"
-                        logger.info(f"Filtered {len(filtered_events)} events for this quarter")
-                        month_filtered = True
-                    
-                    # Specific month filtering
-                    if not month_filtered:
-                        month_names = {
-                            'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
-                            'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
-                        }
-                        for month_name, month_num in month_names.items():
-                            if month_name in text_lower:
-                                # Filter events in that specific month
-                                filtered_events = [
-                                    e for e in filtered_events
-                                    if e['event_date'].month == month_num
-                                ]
-                                time_range = f"{month_name.upper()}"
-                                logger.info(f"Filtered {len(filtered_events)} events for month: {month_name}")
-                                break
-
-                    # Third: Apply date-based filtering (today, tomorrow, this week)
-                    if date_context == 'today':
-                        today_str = current_datetime.strftime('%Y-%m-%d')
-                        filtered_events = [e for e in filtered_events if str(e['event_date']) == today_str]
-                        time_range = "TODAY"
-                    elif date_context == 'tomorrow':
-                        tomorrow = current_datetime + timedelta(days=1)
-                        tomorrow_str = tomorrow.strftime('%Y-%m-%d')
-                        filtered_events = [e for e in filtered_events if str(e['event_date']) == tomorrow_str]
-                        time_range = "TOMORROW"
-                    elif date_context == 'week':
-                        week_end = current_datetime + timedelta(days=7)
-                        filtered_events = [e for e in filtered_events if current_datetime.date() <= e['event_date'] <= week_end.date()]
-                        time_range = "THIS WEEK"
-                    elif date_context in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
-                        filtered_events = [e for e in filtered_events if e['event_date'].strftime('%A').lower() == date_context]
-                        time_range = date_context.upper()
-
-                full_prompt += f"📅 {user_name.upper()}'S {time_range} SCHEDULE:\n"
-                if filtered_events:
-                    for event in filtered_events:
-                        event_date_obj = event['event_date']
-                        event_date_str = event_date_obj.strftime('%A, %B %d, %Y') if hasattr(event_date_obj, 'strftime') else str(event_date_obj)
-                        event_time_str = str(event['event_time']) if event['event_time'] else "All day"
-                        importance_emoji = "🔴" if event['importance'] >= 9 else "🟠" if event['importance'] >= 7 else "🔵"
-                        full_prompt += f"{importance_emoji} {event['title']} - {event_date_str} at {event_time_str}\n"
-                        if event['description']:
-                            full_prompt += f"   Details: {event['description']}\n"
-                    full_prompt += "\n⚠️ Only mention events listed above. Use EXACT dates shown.\n\n"
-                else:
-                    full_prompt += f"NO EVENTS for {time_range}\n\n"
-            elif is_schedule_related and not schedule_events:
-                full_prompt += "📅 SCHEDULE: Empty - no events scheduled. Clearly tell the user their calendar is clear.\n\n"
-
-            # Add persistent memories to context (exclude schedule category - shown separately above)
-            non_schedule_memories = [mem for mem in persistent_memories if mem['category'] != 'schedule']
-            if non_schedule_memories:
-                full_prompt += "IMPORTANT SAVED INFORMATION:\n"
-                for mem in non_schedule_memories:
-                    category_label = mem['category'].upper()
-                    full_prompt += f"[{category_label}] {mem['content']}\n"
-                    logger.debug(f"Adding memory to prompt: [{category_label}] {mem['content']}")
+            # Get comprehensive context from MemoryManager
+            context = self.memory_manager.get_conversation_context(
+                user=user_name,
+                query=current_message,
+                session_id=session_id,
+                include_entities=True,
+                include_consolidated=True
+            )
+            
+            # Add entities if available
+            if context.get('entities'):
+                full_prompt += "KNOWN ENTITIES:\n"
+                for entity in context['entities']:
+                    full_prompt += f"- {entity.text} ({entity.entity_type}): {entity.context}\n"
                 full_prompt += "\n"
-
-            # Get short-term memory (current session)
-            short_term_memory = []
-            if session_id:
-                short_term_memory = self.get_conversation_history(session_id=session_id, limit=short_term_limit)
-
-            # Get long-term memory (semantically similar past conversations)
-            long_term_memory = []
-            if user_name and session_id:
-                long_term_memory = self.get_semantic_context(
-                    current_message, user_name, session_id, limit=long_term_limit
-                )
-
-            # Add long-term memory context (if available)
-            if long_term_memory:
-                full_prompt += "BACKGROUND CONTEXT (for understanding only - DO NOT bring up these old topics unless directly asked):\n"
-                for mem in long_term_memory:
-                    role_label = "User" if mem['role'] == 'user' else "You"
-                    full_prompt += f"{role_label}: {mem['message']}\n"
-                full_prompt += "\nREMEMBER: This background context is ONLY for understanding the user better. Focus on their CURRENT message, NOT old topics.\n\n"
-
-            # Add short-term memory (current conversation)
-            if short_term_memory:
+            
+            # Add relevant memories (mix of recent full + old consolidated)
+            if context.get('memories'):
+                full_prompt += "RELEVANT CONTEXT:\n"
+                for memory in context['memories']:
+                    role = memory.get('metadata', {}).get('role', 'user')
+                    content = memory.get('content', '')
+                    full_prompt += f"{role}: {content}\n"
+                full_prompt += "\n"
+            
+            # Add consolidated memories if available
+            if context.get('consolidated'):
+                full_prompt += "SUMMARY OF PAST CONVERSATIONS:\n"
+                for consolidated in context['consolidated']:
+                    full_prompt += f"- {consolidated.get('content', '')}\n"
+                full_prompt += "\n"
+            
+            # Add current session
+            if context.get('session'):
                 full_prompt += "Current conversation:\n"
-                for role, message, msg_type, timestamp in short_term_memory:
-                    if role == 'user':
-                        full_prompt += f"User: {message}\n"
-                    else:
-                        full_prompt += f"You: {message}\n"
+                for msg in context['session']:
+                    role = msg.get('role', 'user')
+                    content = msg.get('content', '')
+                    full_prompt += f"{role}: {content}\n"
                 full_prompt += "\n"
-
+            
             # Add current message
             full_prompt += f"User: {current_message}\nYou:"
-
+            
             return full_prompt
 
         except Exception as e:
             logger.error(f"Error building prompt with context: {e}")
             # Fallback to just the current message if there's an error
-            return current_message
+            return f"User: {current_message}\nYou:"
 
     def synthesize_speech(self, text):
         """Send text to Piper for TTS with circuit breaker protection"""
@@ -3598,6 +3776,19 @@ SCHEDULING CAPABILITIES:
         # Initialize database
         self.init_database()
 
+        # Initialize memory manager now that database pool is ready
+        try:
+            self.memory_manager = MemoryManager(
+                chromadb_url=os.getenv('CHROMADB_URL', 'http://chromadb:8000'),
+                redis_url=os.getenv('REDIS_URL', 'redis://redis:6379'),
+                db_pool=self.db_pool,
+                ollama_url=self.ollama_url
+            )
+            logger.info("MemoryManager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize MemoryManager: {e}")
+            self.memory_manager = None
+
         # Wait for services
         self.wait_for_services()
 
@@ -3697,6 +3888,19 @@ SCHEDULING CAPABILITIES:
 
         # Initialize database
         self.init_database()
+
+        # Initialize memory manager now that database pool is ready
+        try:
+            self.memory_manager = MemoryManager(
+                chromadb_url=os.getenv('CHROMADB_URL', 'http://chromadb:8000'),
+                redis_url=os.getenv('REDIS_URL', 'redis://redis:6379'),
+                db_pool=self.db_pool,
+                ollama_url=self.ollama_url
+            )
+            logger.info("MemoryManager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize MemoryManager: {e}")
+            self.memory_manager = None
 
         # Wait for services
         self.wait_for_services()

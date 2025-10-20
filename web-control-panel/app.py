@@ -6,7 +6,14 @@ import json
 import subprocess
 import pytz
 import uuid
-from datetime import datetime
+import redis
+import chromadb
+import logging
+from datetime import datetime, timedelta
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -17,6 +24,10 @@ DB_NAME = os.getenv('DB_NAME', 'mumble_ai')
 DB_USER = os.getenv('DB_USER', 'mumbleai')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'mumbleai123')
 
+# Memory system configuration
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
+CHROMADB_URL = os.getenv('CHROMADB_URL', 'http://chromadb:8000')
+
 # Timezone configuration
 NY_TZ = pytz.timezone('America/New_York')
 
@@ -24,12 +35,32 @@ def format_timestamp_ny(timestamp):
     """Convert UTC timestamp to NY time and format as ISO string"""
     if timestamp is None:
         return None
-    # Ensure timestamp is timezone-aware (assume UTC if naive)
+    # Ensure timezone-aware (assume UTC if naive)
     if timestamp.tzinfo is None:
         timestamp = pytz.utc.localize(timestamp)
     # Convert to NY time
     ny_time = timestamp.astimezone(NY_TZ)
     return ny_time.isoformat()
+
+def get_redis_connection():
+    """Get Redis connection for memory system monitoring"""
+    try:
+        return redis.from_url(REDIS_URL)
+    except Exception as e:
+        print(f"Redis connection error: {e}")
+        return None
+
+def get_chromadb_client():
+    """Get ChromaDB client for memory system monitoring"""
+    try:
+        # Parse the URL properly
+        url_parts = CHROMADB_URL.replace('http://', '').split(':')
+        host = url_parts[0]
+        port = int(url_parts[1]) if len(url_parts) > 1 else 8000
+        return chromadb.HttpClient(host=host, port=port)
+    except Exception as e:
+        print(f"ChromaDB connection error: {e}")
+        return None
 
 # Config storage in database
 def get_db_connection():
@@ -121,6 +152,517 @@ def index():
 @app.route('/schedule')
 def schedule():
     return render_template('schedule.html')
+
+@app.route('/memory')
+def memory():
+    return render_template('memory.html')
+
+# Memory System API Endpoints
+@app.route('/api/memory/status', methods=['GET'])
+def get_memory_status():
+    """Get status of all memory system components"""
+    try:
+        status = {}
+
+        # Test ChromaDB
+        try:
+            chroma_client = get_chromadb_client()
+            if chroma_client:
+                heartbeat = chroma_client.heartbeat()
+                collections = chroma_client.list_collections()
+                status['chromadb'] = {
+                    'status': 'healthy',
+                    'info': {
+                        'heartbeat': heartbeat,
+                        'collections': len(collections)
+                    }
+                }
+            else:
+                status['chromadb'] = {'status': 'error', 'error': 'Failed to connect'}
+        except Exception as e:
+            status['chromadb'] = {'status': 'error', 'error': str(e)}
+
+        # Test Redis
+        try:
+            redis_client = get_redis_connection()
+            if redis_client:
+                redis_client.ping()
+                info = redis_client.info('memory')
+                status['redis'] = {
+                    'status': 'healthy',
+                    'info': {
+                        'used_memory': info.get('used_memory_human', 'N/A'),
+                        'connected_clients': redis_client.info('clients').get('connected_clients', 0),
+                        'keyspace_hits': redis_client.info('stats').get('keyspace_hits', 0),
+                        'keyspace_misses': redis_client.info('stats').get('keyspace_misses', 0)
+                    }
+                }
+            else:
+                status['redis'] = {'status': 'error', 'error': 'Failed to connect'}
+        except Exception as e:
+            status['redis'] = {'status': 'error', 'error': str(e)}
+
+        # Test PostgreSQL
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            conn.close()
+            status['postgresql'] = {
+                'status': 'healthy',
+                'info': {}
+            }
+        except Exception as e:
+            status['postgresql'] = {'status': 'error', 'error': str(e)}
+
+        # Get entity stats from database
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get total count
+            cursor.execute("SELECT COUNT(*) FROM entity_mentions")
+            entity_count = cursor.fetchone()[0]
+
+            # Get recent entities
+            cursor.execute("""
+                SELECT entity_text, entity_type, created_at
+                FROM entity_mentions
+                ORDER BY created_at DESC
+                LIMIT 5
+            """)
+            recent_entities = []
+            for row in cursor.fetchall():
+                recent_entities.append({
+                    'text': row[0],
+                    'type': row[1],
+                    'created_at': row[2].isoformat() if row[2] else None
+                })
+
+            cursor.close()
+            conn.close()
+
+            status['entities'] = {
+                'count': entity_count,
+                'recent': recent_entities
+            }
+        except Exception as e:
+            status['entities'] = {
+                'count': 0,
+                'recent': [],
+                'error': str(e)
+            }
+
+        # Get consolidation stats from database
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            # Get last run info
+            cursor.execute("""
+                SELECT run_at, messages_consolidated, summaries_created, tokens_saved_estimate
+                FROM memory_consolidation_log
+                ORDER BY run_at DESC
+                LIMIT 1
+            """)
+            last_run = cursor.fetchone()
+
+            cursor.close()
+            conn.close()
+
+            if last_run:
+                status['consolidation'] = {
+                    'last_run': last_run[0].isoformat() if last_run[0] else None,
+                    'stats': {
+                        'messages_consolidated': last_run[1],
+                        'summaries_created': last_run[2],
+                        'tokens_saved': last_run[3]
+                    }
+                }
+            else:
+                status['consolidation'] = {
+                    'last_run': None,
+                    'stats': {}
+                }
+        except Exception as e:
+            status['consolidation'] = {
+                'last_run': None,
+                'stats': {},
+                'error': str(e)
+            }
+
+        return create_success_response(status)
+
+    except Exception as e:
+        return create_error_response('MEMORY_STATUS_ERROR', 'Failed to get memory status', str(e)), 500
+
+@app.route('/api/memory/entities', methods=['GET'])
+def get_memory_entities():
+    """Get entity mentions from database"""
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
+        user_filter = request.args.get('user')
+        entity_type_filter = request.args.get('entity_type')
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Build query with filters
+        query = """
+            SELECT id, user_name, entity_text, canonical_id, entity_type,
+                   message_id, confidence, context_info, created_at, updated_at
+            FROM entity_mentions
+            WHERE 1=1
+        """
+        count_query = "SELECT COUNT(*) FROM entity_mentions WHERE 1=1"
+        params = []
+        count_params = []
+
+        if user_filter:
+            query += " AND user_name = %s"
+            count_query += " AND user_name = %s"
+            params.append(user_filter)
+            count_params.append(user_filter)
+
+        if entity_type_filter:
+            query += " AND entity_type = %s"
+            count_query += " AND entity_type = %s"
+            params.append(entity_type_filter)
+            count_params.append(entity_type_filter)
+
+        # Get total count
+        cursor.execute(count_query, count_params)
+        total = cursor.fetchone()[0]
+
+        # Get paginated results
+        offset = (page - 1) * per_page
+        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        params.extend([per_page, offset])
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        entities = []
+        for row in rows:
+            entities.append({
+                'id': row[0],
+                'user_name': row[1],
+                'entity_text': row[2],
+                'canonical_id': row[3],
+                'entity_type': row[4],
+                'message_id': row[5],
+                'confidence': row[6],
+                'context_info': row[7],
+                'created_at': row[8].isoformat() if row[8] else None,
+                'updated_at': row[9].isoformat() if row[9] else None
+            })
+
+        cursor.close()
+        conn.close()
+
+        total_pages = (total + per_page - 1) // per_page
+
+        return create_success_response({
+            'entities': entities,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total,
+                'pages': total_pages
+            }
+        })
+    except Exception as e:
+        return create_error_response('ENTITIES_ERROR', 'Failed to get entities', str(e)), 500
+
+@app.route('/api/memory/consolidation', methods=['GET'])
+def get_memory_consolidation():
+    """Get consolidation history from database"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get summary stats
+        cursor.execute("""
+            SELECT COUNT(*) as total_runs,
+                   COALESCE(SUM(messages_consolidated), 0) as total_messages,
+                   COALESCE(SUM(summaries_created), 0) as total_summaries,
+                   COALESCE(SUM(tokens_saved_estimate), 0) as total_tokens
+            FROM memory_consolidation_log
+        """)
+        summary_row = cursor.fetchone()
+
+        summary = {
+            'total_runs': summary_row[0],
+            'total_messages_consolidated': summary_row[1],
+            'total_summaries_created': summary_row[2],
+            'total_tokens_saved': summary_row[3]
+        }
+
+        # Get recent history (last 20 runs)
+        cursor.execute("""
+            SELECT id, user_name, messages_consolidated, summaries_created,
+                   tokens_saved_estimate, cutoff_date, run_at
+            FROM memory_consolidation_log
+            ORDER BY run_at DESC
+            LIMIT 20
+        """)
+        history_rows = cursor.fetchall()
+
+        history = []
+        for row in history_rows:
+            history.append({
+                'id': row[0],
+                'user_name': row[1],
+                'messages_consolidated': row[2],
+                'summaries_created': row[3],
+                'tokens_saved_estimate': row[4],
+                'cutoff_date': row[5].isoformat() if row[5] else None,
+                'run_at': row[6].isoformat() if row[6] else None
+            })
+
+        cursor.close()
+        conn.close()
+
+        return create_success_response({
+            'summary': summary,
+            'history': history
+        })
+    except Exception as e:
+        return create_error_response('CONSOLIDATION_ERROR', 'Failed to get consolidation data', str(e)), 500
+
+@app.route('/api/memory/consolidation/run', methods=['POST'])
+def run_consolidation():
+    """Trigger memory consolidation for old conversations"""
+    try:
+        data = request.get_json() or {}
+        cutoff_days = data.get('cutoff_days', 7)
+        user_name = data.get('user_name')  # Optional: consolidate for specific user
+
+        logger.info(f"Starting manual consolidation: cutoff_days={cutoff_days}, user={user_name or 'all'}")
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cutoff_date = datetime.now() - timedelta(days=cutoff_days)
+
+        # Get users with old messages to consolidate
+        if user_name:
+            user_filter = "AND user_name = %s"
+            user_params = [cutoff_date, user_name]
+        else:
+            user_filter = ""
+            user_params = [cutoff_date]
+
+        cursor.execute(f"""
+            SELECT DISTINCT user_name
+            FROM conversation_history
+            WHERE timestamp < %s
+            {user_filter}
+            AND role = 'user'
+        """, user_params)
+
+        users_to_consolidate = [row[0] for row in cursor.fetchall()]
+
+        if not users_to_consolidate:
+            cursor.close()
+            conn.close()
+            return create_success_response({
+                'message': 'No old conversations to consolidate',
+                'messages_consolidated': 0,
+                'summaries_created': 0,
+                'tokens_saved': 0
+            })
+
+        total_messages_consolidated = 0
+        total_summaries_created = 0
+        total_tokens_saved_estimate = 0
+
+        # Get Ollama config from bot_config
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'ollama_url'")
+        row = cursor.fetchone()
+        ollama_url = row[0] if row else os.environ.get('OLLAMA_URL', 'http://host.docker.internal:11434')
+
+        cursor.execute("SELECT value FROM bot_config WHERE key = 'memory_extraction_model'")
+        row = cursor.fetchone()
+        ollama_model = row[0] if row else 'qwen2.5:3b'
+
+        for user in users_to_consolidate:
+            try:
+                # Get old messages for this user
+                cursor.execute("""
+                    SELECT id, role, message, timestamp
+                    FROM conversation_history
+                    WHERE user_name = %s
+                    AND timestamp < %s
+                    ORDER BY timestamp ASC
+                """, (user, cutoff_date))
+
+                old_messages = cursor.fetchall()
+
+                if len(old_messages) < 5:  # Don't consolidate if too few messages
+                    logger.debug(f"Skipping {user}: only {len(old_messages)} old messages")
+                    continue
+
+                # Format conversation for summarization
+                conversation_text = ""
+                message_ids = []
+                for msg_id, role, message, timestamp in old_messages:
+                    message_ids.append(msg_id)
+                    conversation_text += f"[{timestamp}] {role}: {message}\n"
+
+                # Use Ollama to create summary
+                summary_prompt = f"""Summarize this conversation history for user "{user}".
+Extract the key topics discussed, important facts mentioned, and any decisions or action items.
+Be concise but preserve critical information.
+
+Conversation:
+{conversation_text}
+
+Provide a structured summary in this format:
+- Main topics: [list]
+- Key facts: [list]
+- Important events/dates: [list]
+- Action items: [list]
+- Overall context: [brief description]
+
+Summary:"""
+
+                logger.info(f"Consolidating {len(old_messages)} messages for {user} using model: {ollama_model}")
+
+                try:
+                    response = requests.post(
+                        f"{ollama_url}/api/generate",
+                        json={
+                            'model': ollama_model,
+                            'prompt': summary_prompt,
+                            'stream': False,
+                            'options': {
+                                'temperature': 0.3,
+                                'num_predict': 1000
+                            }
+                        },
+                        timeout=300  # 5 minute timeout
+                    )
+
+                    if response and response.status_code == 200:
+                        summary = response.json().get('response', '').strip()
+
+                        if summary:
+                            # Save summary as a persistent memory
+                            cursor.execute("""
+                                INSERT INTO persistent_memories
+                                (user_name, category, content, importance, active)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (
+                                user,
+                                'consolidated_history',
+                                f"Summary of conversations before {cutoff_date.date()}:\n{summary}",
+                                7,  # Medium-high importance
+                                True
+                            ))
+
+                            # Estimate tokens saved
+                            original_tokens = len(conversation_text) // 4
+                            summary_tokens = len(summary) // 4
+                            tokens_saved = max(0, original_tokens - summary_tokens)
+
+                            # Delete old messages
+                            cursor.execute("""
+                                DELETE FROM conversation_history
+                                WHERE id = ANY(%s)
+                            """, (message_ids,))
+
+                            total_messages_consolidated += len(old_messages)
+                            total_summaries_created += 1
+                            total_tokens_saved_estimate += tokens_saved
+
+                            logger.info(f"Consolidated {len(old_messages)} messages for {user}, saved ~{tokens_saved} tokens")
+                        else:
+                            logger.warning(f"Empty summary for {user}, skipping")
+                    else:
+                        logger.error(f"Ollama error for {user}: {response.status_code if response else 'No response'}")
+
+                except requests.exceptions.Timeout:
+                    logger.warning(f"Consolidation timeout for {user}, skipping")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Network error for {user}: {e}")
+
+            except Exception as e:
+                logger.error(f"Error consolidating for {user}: {e}", exc_info=True)
+
+        # Log consolidation run
+        if total_summaries_created > 0:
+            cursor.execute("""
+                INSERT INTO memory_consolidation_log
+                (user_name, messages_consolidated, summaries_created, tokens_saved_estimate, cutoff_date)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                user_name if user_name else 'all_users',
+                total_messages_consolidated,
+                total_summaries_created,
+                total_tokens_saved_estimate,
+                cutoff_date.date()
+            ))
+
+            conn.commit()
+            logger.info(f"Consolidation complete: {total_messages_consolidated} messages → {total_summaries_created} summaries")
+
+        cursor.close()
+        conn.close()
+
+        return create_success_response({
+            'message': 'Consolidation completed successfully',
+            'messages_consolidated': total_messages_consolidated,
+            'summaries_created': total_summaries_created,
+            'tokens_saved': total_tokens_saved_estimate
+        })
+
+    except Exception as e:
+        logger.error(f"Error running consolidation: {e}", exc_info=True)
+        return create_error_response('CONSOLIDATION_RUN_ERROR', 'Failed to run consolidation', str(e)), 500
+
+@app.route('/api/memory/search', methods=['GET'])
+def search_memory():
+    """Search conversations and entities"""
+    try:
+        query = request.args.get('q', '')
+        limit = request.args.get('limit', 20, type=int)
+
+        if not query:
+            return create_error_response('INVALID_QUERY', 'Search query is required'), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Search conversations
+        cursor.execute("""
+            SELECT user_name, message, message_type, timestamp
+            FROM conversation_history
+            WHERE message ILIKE %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """, (f'%{query}%', limit))
+
+        conversations = []
+        for row in cursor.fetchall():
+            conversations.append({
+                'user_name': row[0],
+                'message': row[1],
+                'message_type': row[2],
+                'created_at': format_timestamp_ny(row[3]) if row[3] else None
+            })
+
+        cursor.close()
+        conn.close()
+
+        return create_success_response({
+            'conversations': conversations,
+            'entities': []  # Placeholder
+        })
+
+    except Exception as e:
+        return create_error_response('SEARCH_ERROR', 'Search failed', str(e)), 500
 
 # Ollama Management
 @app.route('/api/ollama/config', methods=['GET'])
@@ -879,9 +1421,13 @@ def get_memories():
         query = """
             SELECT id, user_name, category, content, extracted_at, importance, tags, active, event_date, event_time
             FROM persistent_memories
-            WHERE active = TRUE AND user_name = %s
+            WHERE active = TRUE
         """
-        params = [user_name]
+        params = []
+
+        if user_name:
+            query += " AND user_name = %s"
+            params.append(user_name)
 
         if category:
             query += " AND category = %s"
@@ -901,14 +1447,18 @@ def get_memories():
         # Get total count for pagination
         count_query = """
             SELECT COUNT(*) FROM persistent_memories
-            WHERE active = TRUE AND user_name = %s
+            WHERE active = TRUE
         """
-        count_params = [user_name]
-        
+        count_params = []
+
+        if user_name:
+            count_query += " AND user_name = %s"
+            count_params.append(user_name)
+
         if category:
             count_query += " AND category = %s"
             count_params.append(category)
-            
+
         if importance is not None:
             count_query += " AND importance >= %s"
             count_params.append(importance)

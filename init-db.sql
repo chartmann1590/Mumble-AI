@@ -347,3 +347,51 @@ END $$;
 
 -- Create GIN index for array similarity searches
 CREATE INDEX IF NOT EXISTS idx_memories_embedding ON persistent_memories USING GIN(embedding) WHERE embedding IS NOT NULL;
+
+-- Track entity mentions
+CREATE TABLE IF NOT EXISTS entity_mentions (
+    id SERIAL PRIMARY KEY,
+    user_name VARCHAR(255) NOT NULL,
+    entity_text VARCHAR(500) NOT NULL,
+    canonical_id VARCHAR(255),
+    entity_type VARCHAR(50) CHECK (entity_type IN ('PERSON', 'PLACE', 'ORGANIZATION', 'DATE', 'TIME', 'EVENT', 'OTHER')),
+    message_id INTEGER REFERENCES conversation_history(id) ON DELETE CASCADE,
+    confidence FLOAT DEFAULT 1.0,
+    context_info TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_user ON entity_mentions(user_name);
+CREATE INDEX IF NOT EXISTS idx_entity_canonical ON entity_mentions(canonical_id);
+CREATE INDEX IF NOT EXISTS idx_entity_type ON entity_mentions(entity_type);
+
+-- Track consolidation runs
+CREATE TABLE IF NOT EXISTS memory_consolidation_log (
+    id SERIAL PRIMARY KEY,
+    user_name VARCHAR(255) NOT NULL,
+    messages_consolidated INTEGER NOT NULL,
+    summaries_created INTEGER NOT NULL,
+    tokens_saved_estimate INTEGER,
+    cutoff_date DATE,
+    run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_consolidation_user ON memory_consolidation_log(user_name);
+CREATE INDEX IF NOT EXISTS idx_consolidation_date ON memory_consolidation_log(run_at DESC);
+
+-- Add columns to conversation_history for consolidation tracking
+ALTER TABLE conversation_history 
+ADD COLUMN IF NOT EXISTS consolidated_at TIMESTAMP,
+ADD COLUMN IF NOT EXISTS consolidated_summary_id VARCHAR(255);
+
+-- Add config entries for new memory system
+INSERT INTO bot_config (key, value) VALUES
+    ('chromadb_url', 'http://chromadb:8000'),
+    ('redis_url', 'redis://redis:6379'),
+    ('enable_entity_tracking', 'true'),
+    ('enable_memory_consolidation', 'true'),
+    ('memory_consolidation_days', '7'),
+    ('hybrid_search_semantic_weight', '0.7'),
+    ('consolidation_schedule_hour', '3')
+ON CONFLICT (key) DO NOTHING;

@@ -4,6 +4,8 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
     libopus0 \
     libopus-dev \
     ffmpeg \
@@ -21,9 +23,13 @@ RUN pip install --no-cache-dir \
 
 # Copy application files
 COPY bot.py .
+COPY memory_manager.py .
 COPY requirements.txt .
 
-# Install any additional requirements
+# Install pymumble first (has dependency issues)
+RUN pip install --no-cache-dir pymumble==1.6.1
+
+# Install other dependencies from requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Add health check script
