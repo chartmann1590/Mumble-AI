@@ -24,6 +24,7 @@ from typing import List, Dict, Optional, Any, Tuple
 from enum import Enum
 from dataclasses import dataclass
 from collections import defaultdict, deque
+from functools import wraps
 
 import chromadb
 import redis
@@ -33,6 +34,28 @@ import numpy as np
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
+
+
+def db_retry(max_retries=3, delay=1, backoff=2):
+    """Decorator for database operations with exponential backoff retry"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (backoff ** attempt)
+                        logger.warning(f"Database operation failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Database operation failed after {max_retries} attempts: {e}")
+            raise last_exception
+        return wrapper
+    return decorator
 
 
 class ConversationPhase(Enum):
@@ -403,9 +426,10 @@ Only extract entities that are clearly mentioned. Return empty array if none fou
 class MemoryConsolidator:
     """Memory consolidation and summarization system"""
     
-    def __init__(self, ollama_url: str, db_pool):
+    def __init__(self, ollama_url: str, db_pool, generate_embedding_func):
         self.ollama_url = ollama_url
         self.db_pool = db_pool
+        self.generate_embedding_func = generate_embedding_func
         self.consolidation_thread = None
         self.running = False
     
@@ -459,7 +483,7 @@ class MemoryConsolidator:
                 summary = self.summarize_conversation_chunk(chunk)
                 if summary:
                     # Generate embedding for summary
-                    summary_embedding = self.generate_embedding(summary)
+                    summary_embedding = self.generate_embedding_func(summary)
                     if summary_embedding:
                         # Store in consolidated_memories
                         summary_id = str(uuid.uuid4())
@@ -647,7 +671,7 @@ class MemoryManager:
         self.vector_store = VectorStore(chromadb_url)
         self.cache_layer = CacheLayer(redis_url)
         self.entity_tracker = EntityTracker(ollama_url)
-        self.memory_consolidator = MemoryConsolidator(ollama_url, db_pool)
+        self.memory_consolidator = MemoryConsolidator(ollama_url, db_pool, self.generate_embedding)
         self.conversation_context = ConversationContext()
         self.db_pool = db_pool
         self.ollama_url = ollama_url
@@ -728,7 +752,9 @@ class MemoryManager:
             return False
     
     def get_conversation_context(self, user: str, query: str, session_id: str = None,
-                                include_entities: bool = True, include_consolidated: bool = True) -> Dict:
+                                include_entities: bool = True, include_consolidated: bool = True,
+                                short_term_limit: int = 10, long_term_limit: int = 10,
+                                semantic_ranking: bool = True) -> Dict:
         """Build comprehensive context from all sources"""
         try:
             context = {
@@ -737,24 +763,28 @@ class MemoryManager:
                 'session': [],
                 'consolidated': []
             }
-            
+
             # Get entities from cache
             if include_entities:
                 context['entities'] = self.cache_layer.get_entities(user)
-            
-            # Get recent session messages
+
+            # Get recent session messages with configurable limit
             if session_id:
-                context['session'] = self._get_session_messages(user, session_id)
-            
-            # Get relevant memories using hybrid search
-            context['memories'] = self.hybrid_search(query, user, top_k=5)
-            
+                context['session'] = self._get_session_messages(user, session_id, limit=short_term_limit)
+
+            # Get relevant memories using hybrid search with configurable limit
+            if semantic_ranking:
+                context['memories'] = self.hybrid_search(query, user, top_k=long_term_limit)
+            else:
+                # Simple recent message retrieval without semantic ranking
+                context['memories'] = self._get_recent_messages(user, limit=long_term_limit)
+
             # Get consolidated memories if requested
             if include_consolidated:
                 context['consolidated'] = self._get_consolidated_memories(user, query)
-            
+
             return context
-            
+
         except Exception as e:
             logger.error(f"Error getting conversation context: {e}")
             return {'entities': [], 'memories': [], 'session': [], 'consolidated': []}
@@ -856,39 +886,73 @@ class MemoryManager:
             logger.error(f"Error in keyword search: {e}")
             return []
     
-    def _get_session_messages(self, user: str, session_id: str) -> List[Dict]:
+    def _get_session_messages(self, user: str, session_id: str, limit: int = 10) -> List[Dict]:
         """Get recent session messages"""
         try:
             if not self.db_pool:
                 logger.error("Database pool not initialized")
                 return []
-                
+
             conn = self.db_pool.getconn()
             cursor = conn.cursor()
-            
+
             cursor.execute("""
                 SELECT role, message, message_type, timestamp
                 FROM conversation_history
                 WHERE user_name = %s AND session_id = %s
                 ORDER BY timestamp DESC
-                LIMIT 10
-            """, (user, session_id))
-            
+                LIMIT %s
+            """, (user, session_id, limit))
+
             results = cursor.fetchall()
             cursor.close()
-            db_pool.putconn(conn)
-            
+            self.db_pool.putconn(conn)
+
             return [{
                 'role': row[0],
                 'content': row[1],
                 'message_type': row[2],
                 'timestamp': row[3].isoformat()
             } for row in results]
-            
+
         except Exception as e:
             logger.error(f"Error getting session messages: {e}")
             return []
-    
+
+    @db_retry(max_retries=3, delay=1, backoff=2)
+    def _get_recent_messages(self, user: str, limit: int = 10) -> List[Dict]:
+        """Get recent messages without semantic ranking"""
+        try:
+            if not self.db_pool:
+                logger.error("Database pool not initialized")
+                return []
+
+            conn = self.db_pool.getconn()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT role, message, message_type, timestamp
+                FROM conversation_history
+                WHERE user_name = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (user, limit))
+
+            results = cursor.fetchall()
+            cursor.close()
+            self.db_pool.putconn(conn)
+
+            return [{
+                'role': row[0],
+                'content': row[1],
+                'message_type': row[2],
+                'timestamp': row[3].isoformat()
+            } for row in results]
+
+        except Exception as e:
+            logger.error(f"Error getting recent messages: {e}")
+            return []
+
     def _get_consolidated_memories(self, user: str, query: str) -> List[Dict]:
         """Get relevant consolidated memories"""
         # This would query the consolidated_memories collection

@@ -6,8 +6,8 @@ services:
       - "48000:64738/tcp"
       - "48000:64738/udp"
     volumes:
-      - ./mumble-data:/data
-      - ./mumble-config.ini:/etc/mumble-server.ini
+      - /mnt/h/Mumble-AI/mumble-data:/data
+      - /mnt/h/Mumble-AI/mumble-config.ini:/etc/mumble-server.ini
     environment:
       - MUMBLE_SUPERUSER_PASSWORD=${MUMBLE_PASSWORD:-changeme}
     restart: unless-stopped
@@ -19,13 +19,14 @@ services:
       context: ./faster-whisper-service
       dockerfile: Dockerfile
     container_name: faster-whisper
+    runtime: nvidia
     ports:
       - "5000:5000"
     environment:
       - MODEL_SIZE=${WHISPER_MODEL:-base}
       - DEVICE=cuda
-    volumes:
-      - ./models/whisper:/app/models
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     restart: unless-stopped
     networks:
       - mumble-ai-network
@@ -130,7 +131,6 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-mumble_ai}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     restart: unless-stopped
     networks:
       - mumble-ai-network
@@ -423,6 +423,41 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+
+  whisper-web-interface:
+    build:
+      context: ./whisper-web-interface
+      dockerfile: Dockerfile
+    container_name: whisper-web-interface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      faster-whisper:
+        condition: service_started
+    ports:
+      - "5008:5008"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB:-mumble_ai}
+      - DB_USER=${POSTGRES_USER:-mumbleai}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-mumbleai123}
+      - WHISPER_URL=http://faster-whisper:5000
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:latest}
+    volumes:
+      - /tmp:/tmp
+    restart: unless-stopped
+    networks:
+      - mumble-ai-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   mumble-ai-network:

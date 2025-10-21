@@ -398,3 +398,49 @@ INSERT INTO bot_config (key, value) VALUES
     ('hybrid_search_semantic_weight', '0.7'),
     ('consolidation_schedule_hour', '3')
 ON CONFLICT (key) DO NOTHING;
+
+-- Create transcriptions table for Whisper web interface
+CREATE TABLE IF NOT EXISTS transcriptions (
+    id SERIAL PRIMARY KEY,
+    filename VARCHAR(500) NOT NULL,
+    original_format VARCHAR(50) NOT NULL,
+    file_size_bytes BIGINT NOT NULL,
+    duration_seconds FLOAT,
+    transcription_text TEXT NOT NULL,
+    language VARCHAR(10),
+    language_probability FLOAT,
+    summary_text TEXT,
+    summary_model VARCHAR(100),
+    processing_time_seconds FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_identifier VARCHAR(255)
+);
+
+-- Create indexes for transcriptions table
+CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at ON transcriptions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transcriptions_language ON transcriptions(language);
+CREATE INDEX IF NOT EXISTS idx_transcriptions_filename ON transcriptions(filename);
+CREATE INDEX IF NOT EXISTS idx_transcriptions_user ON transcriptions(user_identifier);
+
+-- Add comments for transcriptions table
+COMMENT ON TABLE transcriptions IS 'Stores audio/video file transcriptions from Whisper web interface';
+COMMENT ON COLUMN transcriptions.original_format IS 'Original file format (mp3, mp4, wav, etc.)';
+COMMENT ON COLUMN transcriptions.file_size_bytes IS 'File size in bytes';
+COMMENT ON COLUMN transcriptions.duration_seconds IS 'Audio duration in seconds';
+COMMENT ON COLUMN transcriptions.language IS 'Detected language code (e.g., en, es, fr)';
+COMMENT ON COLUMN transcriptions.language_probability IS 'Confidence score for language detection';
+COMMENT ON COLUMN transcriptions.summary_text IS 'AI-generated summary of the transcription';
+COMMENT ON COLUMN transcriptions.summary_model IS 'Ollama model used for summarization';
+COMMENT ON COLUMN transcriptions.processing_time_seconds IS 'Total processing time in seconds';
+COMMENT ON COLUMN transcriptions.user_identifier IS 'Optional user identifier for future authentication';
+
+-- Add columns for segments and formatted transcription
+ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS transcription_segments JSONB;
+ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS transcription_formatted TEXT;
+
+-- Add indexes for JSONB queries
+CREATE INDEX IF NOT EXISTS idx_transcriptions_segments ON transcriptions USING GIN (transcription_segments);
+
+-- Add comments
+COMMENT ON COLUMN transcriptions.transcription_segments IS 'Structured JSON with segments, timestamps, and speaker labels';
+COMMENT ON COLUMN transcriptions.transcription_formatted IS 'Formatted text with inline timestamps and speaker labels';

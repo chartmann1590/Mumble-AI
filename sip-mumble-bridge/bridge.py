@@ -3086,12 +3086,8 @@ Use this information when answering questions about scheduling, planning, or tim
                 full_prompt += f"Your personality/character: {persona.strip()}\n\n"
                 full_prompt += "IMPORTANT: Stay in character BUT prioritize truthfulness over role-playing.\n\n"
 
-            # Check if this is a schedule-related query
-            schedule_keywords = ['schedule', 'calendar', 'appointment', 'event', 'meeting', 'plan', 'busy', 'free', 'available', 'when', 'what\'s on', 'coming up', 'today', 'tomorrow', 'this week', 'next week']
-            is_schedule_query = any(keyword in current_message.lower() for keyword in schedule_keywords)
-            
-            # Add schedule information if this is a schedule-related query
-            if is_schedule_query and user_name:
+            # Always include schedule information so AI has access to user's calendar
+            if user_name:
                 try:
                     # Get schedule events for the next 14 days
                     today = current_datetime.date()
@@ -3116,13 +3112,30 @@ Use this information when answering questions about scheduling, planning, or tim
                     logger.error(f"Error retrieving schedule events: {e}")
                     full_prompt += "\n📅 SCHEDULE: Unable to retrieve schedule information at this time.\n\n"
 
-            # Get comprehensive context from MemoryManager
+            # Advanced settings: limits and semantic ranking
+            short_term_limit_cfg = self.get_config('short_term_memory_limit', '10')
+            long_term_limit_cfg = self.get_config('long_term_memory_limit', '10')
+            use_semantic_ranking = self.get_config('use_semantic_memory_ranking', 'false').lower() == 'true'
+
+            try:
+                short_term_limit = max(1, int(str(short_term_limit_cfg)))
+            except Exception:
+                short_term_limit = 10
+            try:
+                long_term_limit = max(1, int(str(long_term_limit_cfg)))
+            except Exception:
+                long_term_limit = 10
+
+            # Get comprehensive context with limits
             context = self.memory_manager.get_conversation_context(
                 user=user_name,
                 query=current_message,
                 session_id=session_id,
                 include_entities=True,
-                include_consolidated=True
+                include_consolidated=True,
+                short_term_limit=short_term_limit,
+                long_term_limit=long_term_limit,
+                semantic_ranking=use_semantic_ranking
             )
             
             # Add entities if available
@@ -3192,6 +3205,8 @@ Use this information when answering questions about scheduling, planning, or tim
             # Get Ollama configuration from database (same as mumble-bot)
             ollama_url = self.get_config('ollama_url', config.DEFAULT_OLLAMA_URL)
             ollama_model = self.get_config('ollama_model', config.DEFAULT_OLLAMA_MODEL)
+            use_chain_of_thought = self.get_config('use_chain_of_thought', 'false').lower() == 'true'
+            enable_parallel_processing = self.get_config('enable_parallel_processing', 'false').lower() == 'true'
             logger.info(f"Using Ollama: {ollama_url} with model: {ollama_model}")
 
             # Detect conversation closure before building prompt
@@ -3221,25 +3236,58 @@ Use this information when answering questions about scheduling, planning, or tim
                     "stop": ["\n\n", "User:", "Assistant:"]  # Stop at conversation breaks
                 }
             
-            resp = requests.post(
-                f"{ollama_url}/api/generate",
-                json={
-                    "model": ollama_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": generation_options
-                },
-                timeout=300,  # 5 minutes for main response generation
-            )
-            if resp.status_code == 200:
-                generated_response = resp.json().get('response', '').strip()
+            # CoT hidden instruction
+            cot_instruction = """
 
-                # Log warning if response is empty
-                if not generated_response:
-                    logger.warning(f"Empty LLM response received. Model: {ollama_model}, User query: '{message[:100]}...'")
-                    return 'I did not understand that.'
+IMPORTANT: Think step by step privately. Do NOT reveal your chain-of-thought. Provide ONLY the final concise answer.
+"""
+            base_prompt = prompt + (cot_instruction if use_chain_of_thought else "")
 
-                return generated_response
+            def _once(p):
+                r = requests.post(
+                    f"{ollama_url}/api/generate",
+                    json={
+                        "model": ollama_model,
+                        "prompt": p,
+                        "stream": False,
+                        "options": generation_options
+                    },
+                    timeout=300,
+                )
+                if r.status_code != 200:
+                    raise requests.RequestException(f"Ollama error: {r.text}")
+                out = r.json().get('response', '').strip()
+                return out or 'I did not understand that.'
+
+            if use_chain_of_thought:
+                if enable_parallel_processing:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    outs = []
+                    with ThreadPoolExecutor(max_workers=3) as ex:
+                        fs = [ex.submit(_once, base_prompt) for _ in range(3)]
+                        for f in as_completed(fs):
+                            try:
+                                outs.append(f.result())
+                            except Exception as e:
+                                logger.error(f"Parallel CoT error: {e}")
+                    if not outs:
+                        outs = [_once(base_prompt)]
+                else:
+                    outs = [_once(base_prompt) for _ in range(3)]
+                from collections import Counter
+                key = lambda s: s.strip().lower()
+                counts = Counter(key(o) for o in outs)
+                best_norm, _ = counts.most_common(1)[0]
+                generated_response = next((o for o in outs if key(o) == best_norm), outs[0])
+            else:
+                generated_response = _once(base_prompt)
+
+            # Log warning if response is empty
+            if not generated_response:
+                logger.warning(f"Empty LLM response received. Model: {ollama_model}, User query: '{message[:100]}...'")
+                return 'I did not understand that.'
+
+            return generated_response
             logger.error(f"Ollama error: {resp.text}")
             return 'Sorry, I encountered an error.'
         except Exception as e:
@@ -3254,12 +3302,12 @@ Use this information when answering questions about scheduling, planning, or tim
             if tts_engine == 'silero':
                 # Use Silero TTS
                 logger.info("Using Silero TTS engine")
-                resp = requests.post(f"{self.silero_url}/synthesize", json={'text': text}, timeout=60)
+                resp = requests.post(f"{self.silero_url}/synthesize", json={'text': text}, timeout=300)
             else:
                 # Use Piper TTS (default)
                 voice_config = self.get_config('piper_voice', 'en_US-lessac-medium')
                 logger.info(f"Using Piper TTS engine with voice: {voice_config}")
-                resp = requests.post(f"{self.piper_url}/synthesize", json={'text': text}, timeout=60)
+                resp = requests.post(f"{self.piper_url}/synthesize", json={'text': text}, timeout=300)
 
             if resp.status_code == 200:
                 return io.BytesIO(resp.content)

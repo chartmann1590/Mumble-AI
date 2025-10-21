@@ -2940,6 +2940,8 @@ User: "Do you know if I've got any meetings tomorrow?"
         ollama_url = self.get_config('ollama_url', self.ollama_url)
         ollama_model = self.get_config('ollama_model', self.ollama_model)
         use_validation = self.get_config('use_response_validation', 'false').lower() == 'true'
+        use_chain_of_thought = self.get_config('use_chain_of_thought', 'false').lower() == 'true'
+        enable_parallel_processing = self.get_config('enable_parallel_processing', 'false').lower() == 'true'
         logger.info(f"Generating response using model: {ollama_model}")
 
         # Detect conversation closure before building prompt
@@ -2951,6 +2953,13 @@ User: "Do you know if I've got any meetings tomorrow?"
 
         # Build prompt with conversation history
         prompt = self.build_prompt_with_context(text, user_name, session_id)
+
+        # Apply Chain-of-Thought hinting (hidden reasoning) if enabled
+        cot_instruction = """
+
+IMPORTANT: Think through the problem step by step privately. Do NOT reveal your chain-of-thought. Provide ONLY the final concise answer in 1-2 short sentences.
+"""
+        cot_prompt = prompt + (cot_instruction if use_chain_of_thought else "")
 
         # Adjust generation parameters based on closure detection
         if closure_detected:
@@ -2970,42 +2979,68 @@ User: "Do you know if I've got any meetings tomorrow?"
                 'stop': ['\n\n', 'User:', 'Assistant:']  # Stop at conversation breaks
             }
 
-        max_attempts = 2 if use_validation else 1
-        for attempt in range(max_attempts):
-            response = requests.post(
+        # Helper to request a single completion
+        def _request_once(prompt_text: str):
+            resp = requests.post(
                 f"{ollama_url}/api/generate",
                 json={
                     'model': ollama_model,
-                    'prompt': prompt,
+                    'prompt': prompt_text,
                     'stream': False,
                     'options': generation_options
                 },
-                timeout=300  # 5 minutes for main response generation
+                timeout=300
             )
+            if resp.status_code != 200:
+                raise requests.RequestException(f"Ollama request failed: {resp.text}")
+            out = resp.json().get('response', '').strip()
+            if not out:
+                logger.warning(f"Empty LLM response received. Model: {ollama_model}, User query: '{text[:100]}...'")
+                out = 'I did not understand that.'
+            return out
 
-            if response.status_code == 200:
-                generated_response = response.json().get('response', 'I did not understand that.')
-
-                # Log warning if response is empty
-                if not generated_response or not generated_response.strip():
-                    logger.warning(f"Empty LLM response received. Model: {ollama_model}, User query: '{text[:100]}...'")
-                    generated_response = "I did not understand that."
-
-                # Validate response if enabled
-                if use_validation and attempt < max_attempts - 1:
-                    is_valid, reason = self.validate_response(generated_response, text, user_name)
-                    if is_valid:
-                        logger.debug(f"Response passed validation on attempt {attempt + 1}")
-                        return generated_response
-                    else:
-                        logger.warning(f"Response failed validation (attempt {attempt + 1}): {reason}")
-                        # Regenerate with stronger anti-hallucination prompt
-                        prompt += "\n\nIMPORTANT: Previous response was inaccurate. Only state facts you are certain about."
-                        continue
+        # CoT self-consistency with optional parallel fan-out
+        max_attempts = 3 if use_validation else 1
+        attempt = 0
+        current_prompt = cot_prompt
+        while attempt < max_attempts:
+            attempt += 1
+            if use_chain_of_thought:
+                # Generate 3 candidates
+                if enable_parallel_processing:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    candidates = []
+                    with ThreadPoolExecutor(max_workers=3) as executor:
+                        futures = [executor.submit(_request_once, current_prompt) for _ in range(3)]
+                        for f in as_completed(futures):
+                            try:
+                                candidates.append(f.result())
+                            except Exception as e:
+                                logger.error(f"Parallel generation error: {e}")
+                    if not candidates:
+                        candidates = [_request_once(current_prompt)]
                 else:
-                    return generated_response
+                    candidates = [_request_once(current_prompt) for _ in range(3)]
+
+                # Simple self-consistency: choose most common normalized response
+                norm = lambda s: s.strip().lower()
+                from collections import Counter
+                counts = Counter(norm(c) for c in candidates)
+                best_norm, _ = counts.most_common(1)[0]
+                chosen = next((c for c in candidates if norm(c) == best_norm), candidates[0])
             else:
-                raise requests.RequestException(f"Ollama request failed: {response.text}")
+                chosen = _request_once(current_prompt)
+
+            if use_validation and attempt < max_attempts:
+                is_valid, reason = self.validate_response(chosen, text, user_name)
+                if is_valid:
+                    logger.debug(f"Response passed validation on attempt {attempt}")
+                    return chosen
+                logger.warning(f"Response failed validation (attempt {attempt}): {reason}")
+                # Strengthen prompt and retry
+                current_prompt = prompt + "\n\nIMPORTANT: Previous response was inaccurate. Only state facts you are certain about."
+                continue
+            return chosen
         
         # If we get here, all attempts failed validation
         return "I apologize, but I want to make sure I give you accurate information. Could you rephrase your question?"
@@ -3106,6 +3141,15 @@ Reason: [brief explanation]"""
                 # Extract reason
                 lines = validation_response.json().get('response', '').strip().split('\n')
                 reason = ' '.join(lines[1:]) if len(lines) > 1 else validation_text
+
+                # Lightweight grounding heuristic checks
+                resp_lower = (response or '').lower()
+                msg_lower = (user_message or '').lower()
+                mentions_added_calendar = 'added to your calendar' in resp_lower or 'i added' in resp_lower
+                user_did_not_request_add = not any(w in msg_lower for w in ['add ', 'schedule', 'put on calendar', 'create event'])
+                if mentions_added_calendar and user_did_not_request_add:
+                    logger.warning("Grounding check: Response claims calendar change without user request")
+                    return False, "Grounding check failed: unsolicited calendar change"
                 
                 logger.debug(f"Response validation: {'VALID' if is_valid else 'INVALID'} - {reason}")
                 return is_valid, reason
@@ -3470,12 +3514,8 @@ Use this information when answering questions about scheduling, planning, or tim
                 full_prompt += f"Your personality/character: {persona.strip()}\n\n"
                 full_prompt += "IMPORTANT: Stay in character BUT prioritize truthfulness over role-playing.\n\n"
 
-            # Check if this is a schedule-related query
-            schedule_keywords = ['schedule', 'calendar', 'appointment', 'event', 'meeting', 'plan', 'busy', 'free', 'available', 'when', 'what\'s on', 'coming up', 'today', 'tomorrow', 'this week', 'next week']
-            is_schedule_query = any(keyword in current_message.lower() for keyword in schedule_keywords)
-            
-            # Add schedule information if this is a schedule-related query
-            if is_schedule_query and user_name:
+            # Always include schedule information so AI has access to user's calendar
+            if user_name:
                 try:
                     # Get today's date and 14 days ahead
                     today = current_datetime.date()
@@ -3515,13 +3555,30 @@ Use this information when answering questions about scheduling, planning, or tim
                     logger.error(f"Error retrieving schedule events: {e}")
                     full_prompt += "SCHEDULE INFORMATION: Unable to retrieve schedule at this time.\n\n"
 
-            # Get comprehensive context from MemoryManager
+            # Advanced settings: limits and semantic ranking
+            short_term_limit_cfg = self.get_config('short_term_memory_limit', '10')
+            long_term_limit_cfg = self.get_config('long_term_memory_limit', '10')
+            use_semantic_ranking = self.get_config('use_semantic_memory_ranking', 'false').lower() == 'true'
+
+            try:
+                short_term_limit = max(1, int(str(short_term_limit_cfg)))
+            except Exception:
+                short_term_limit = 10
+            try:
+                long_term_limit = max(1, int(str(long_term_limit_cfg)))
+            except Exception:
+                long_term_limit = 10
+
+            # Get comprehensive context from MemoryManager with limits
             context = self.memory_manager.get_conversation_context(
                 user=user_name,
                 query=current_message,
                 session_id=session_id,
                 include_entities=True,
-                include_consolidated=True
+                include_consolidated=True,
+                short_term_limit=short_term_limit,
+                long_term_limit=long_term_limit,
+                semantic_ranking=use_semantic_ranking
             )
             
             # Add entities if available

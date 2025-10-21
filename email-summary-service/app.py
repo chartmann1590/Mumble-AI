@@ -740,7 +740,53 @@ Keep it concise and friendly. Use markdown formatting:"""
             logger.info("Generating summary with Ollama...")
             
             # Use retry logic for Ollama call
-            summary = self.call_ollama_with_retry(summary_prompt, max_retries=3, timeout=300)
+            # Respect advanced settings: CoT and parallel multi-sample (n=3) if enabled
+            conn = self.get_db_connection()
+            use_cot = False
+            enable_parallel = False
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT value FROM bot_config WHERE key = 'use_chain_of_thought'")
+                    row = cursor.fetchone()
+                    use_cot = (row and str(row[0]).lower() == 'true')
+                    cursor.execute("SELECT value FROM bot_config WHERE key = 'enable_parallel_processing'")
+                    row = cursor.fetchone()
+                    enable_parallel = (row and str(row[0]).lower() == 'true')
+            finally:
+                conn.close()
+
+            cot_instruction = """
+
+IMPORTANT: Think step by step privately. Do NOT reveal your chain-of-thought. Provide ONLY the final concise summary.
+"""
+            base_prompt = summary_prompt + (cot_instruction if use_cot else "")
+
+            if use_cot:
+                def _once(p):
+                    return self.call_ollama_with_retry(p, max_retries=3, timeout=300)
+                samples = []
+                if enable_parallel:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    with ThreadPoolExecutor(max_workers=3) as ex:
+                        futs = [ex.submit(_once, base_prompt) for _ in range(3)]
+                        for f in as_completed(futs):
+                            try:
+                                res = f.result()
+                                if res:
+                                    samples.append(res)
+                            except Exception as e:
+                                logger.error(f"Parallel CoT summary error: {e}")
+                    if not samples:
+                        samples = [self.call_ollama_with_retry(base_prompt, max_retries=3, timeout=300)]
+                else:
+                    for _ in range(3):
+                        s = self.call_ollama_with_retry(base_prompt, max_retries=3, timeout=300)
+                        if s:
+                            samples.append(s)
+                # Simple selection: choose the longest non-empty (more comprehensive)
+                summary = max(samples, key=lambda s: len(s)) if samples else None
+            else:
+                summary = self.call_ollama_with_retry(base_prompt, max_retries=3, timeout=300)
             
             if summary:
                 logger.info("Summary generated successfully")
@@ -3858,6 +3904,7 @@ Summary:"""
 
             # Get advanced AI settings from database
             short_term_limit = 10  # default
+            long_term_limit = 10  # default
             try:
                 cursor.execute("SELECT value FROM bot_config WHERE key = 'short_term_memory_limit'")
                 row = cursor.fetchone()
@@ -3866,8 +3913,17 @@ Summary:"""
             except:
                 pass
 
+            try:
+                cursor.execute("SELECT value FROM bot_config WHERE key = 'long_term_memory_limit'")
+                row = cursor.fetchone()
+                if row:
+                    long_term_limit = int(row[0])
+            except:
+                pass
+
             # Get memories and schedule for context (user-specific if mapped)
-            memories = self.get_user_memories(mapped_user, limit=short_term_limit)
+            # Use long_term_limit for persistent memories (long-term context)
+            memories = self.get_user_memories(mapped_user, limit=long_term_limit)
             schedule_events = self.get_upcoming_schedule(mapped_user, days_ahead=30)
 
             # NEW: Get thread conversation history
@@ -4156,9 +4212,8 @@ MESSAGE: {body}
 
 Your reply (brief and direct):"""
 
-            # Use retry logic for Ollama call - longer timeout if attachments present
-            timeout = 300 if attachments_analysis else 300  # 5 min for both attachments and regular
-            reply_text = self.call_ollama_with_retry(reply_prompt, max_retries=3, timeout=timeout)
+            # Use retry logic for Ollama call (5 minutes)
+            reply_text = self.call_ollama_with_retry(reply_prompt, max_retries=3, timeout=300)
 
             if reply_text:
                 # Add signature if configured

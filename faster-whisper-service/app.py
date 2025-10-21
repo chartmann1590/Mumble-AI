@@ -1,22 +1,75 @@
 from flask import Flask, request, jsonify
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, download_model
 import os
 import tempfile
 import logging
+import sys
+import time
+import threading
+
+# Configure environment for better download visibility
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'  # Disable hf_transfer
+os.environ['HF_HUB_DISABLE_XET_BACKEND'] = '1'  # Disable XET backend (use regular HTTP)
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout,
+    force=True
+)
+logger = logging.getLogger(__name__)
+
+# Also set huggingface_hub logger to INFO
+logging.getLogger('huggingface_hub').setLevel(logging.INFO)
+logging.getLogger('huggingface_hub.file_download').setLevel(logging.INFO)
+
+# Force unbuffered output
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 # Initialize model
 model_size = os.getenv('MODEL_SIZE', 'base')
 device = os.getenv('DEVICE', 'cpu')
-
-# Use int8 for CUDA (stable for GTX 1080), int8 for CPU
 compute_type = "int8"
 
-logging.info(f"Loading Whisper model: {model_size} on {device} with compute type {compute_type}")
-model = WhisperModel(model_size, device=device, compute_type=compute_type)
-logging.info("Model loaded successfully")
+logger.info("=" * 80)
+logger.info(f"Faster Whisper Service - Starting Up")
+logger.info("=" * 80)
+logger.info(f"Model: {model_size}")
+logger.info(f"Device: {device}")
+logger.info(f"Compute Type: {compute_type}")
+logger.info("=" * 80)
+
+try:
+    logger.info("📥 Downloading/Loading model from Hugging Face...")
+    logger.info(f"Model size: ~3GB for 'large', ~140MB for 'base'")
+    logger.info("Download progress will be shown below...")
+    logger.info("")
+
+    # Download model first (this will show progress)
+    start_time = time.time()
+    logger.info(f"Fetching model files for: {model_size}...")
+
+    # Initialize model (downloads if needed)
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+
+    load_time = time.time() - start_time
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"✓ Model '{model_size}' loaded successfully!")
+    logger.info(f"✓ Load time: {load_time:.1f} seconds")
+    logger.info(f"✓ Running on: {device.upper()}")
+    logger.info(f"✓ Service ready to accept transcription requests on port 5000")
+    logger.info("=" * 80)
+except Exception as e:
+    logger.error("=" * 80)
+    logger.error(f"✗ Failed to load model: {e}")
+    logger.error("=" * 80)
+    import traceback
+    traceback.print_exc()
+    raise
 
 
 @app.route('/health', methods=['GET'])
