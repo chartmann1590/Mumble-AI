@@ -50,6 +50,14 @@ export const regenerateTitle = async (transcriptionId, transcriptionText) => {
   return response.data;
 };
 
+export const generateAIContent = async (transcriptionText, generationType) => {
+  const response = await api.post('/generate-ai-content', {
+    transcription_text: transcriptionText,
+    generation_type: generationType,
+  });
+  return response.data;
+};
+
 export const getTranscriptions = async (page = 1, perPage = 10, search = '') => {
   const response = await api.get('/transcriptions', {
     params: { page, per_page: perPage, search },

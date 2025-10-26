@@ -7,6 +7,7 @@ import SummaryPanel from '../components/SummaryPanel';
 import TimelineView from '../components/TimelineView';
 import SpeakerManager from '../components/SpeakerManager';
 import SpeakerEditor from '../components/SpeakerEditor';
+import AIGenerationPanel from '../components/AIGenerationPanel';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 function TranscriptionDetailPage() {
@@ -267,6 +268,11 @@ function TranscriptionDetailPage() {
             summaryText={transcription.summary_text}
             summaryModel={transcription.summary_model}
             onUpdate={handleUpdate}
+          />
+
+          {/* AI Generation Panel */}
+          <AIGenerationPanel
+            transcriptionText={transcription.transcription_text}
           />
         </div>
       </div>

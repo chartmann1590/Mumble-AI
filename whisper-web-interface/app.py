@@ -911,6 +911,103 @@ def regenerate_title():
         logger.error(f"Title regeneration error: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/generate-ai-content', methods=['POST'])
+def generate_ai_content():
+    """Generate various AI content types (summaries, outlines, key takeaways, etc.) using Ollama"""
+    try:
+        data = request.get_json()
+        if not data or 'transcription_text' not in data or 'generation_type' not in data:
+            return jsonify({'error': 'Transcription text and generation type required'}), 400
+
+        transcription_text = data['transcription_text']
+        generation_type = data['generation_type']
+
+        # Define prompts for different generation types
+        prompts = {
+            'brief_summary': f"""Provide a brief, concise summary of the following transcription in 1-2 paragraphs. Focus only on the most important points:
+
+{transcription_text}""",
+
+            'detailed_summary': f"""Provide a comprehensive, detailed summary of the following transcription. Include all major topics, key points, decisions made, important details, and the overall context:
+
+{transcription_text}""",
+
+            'bullet_points': f"""Create a bullet-point summary of the following transcription. List the main topics, key points, and important takeaways as clear, concise bullet points:
+
+{transcription_text}""",
+
+            'key_takeaways': f"""Identify and list the 5-10 most important key takeaways or insights from the following transcription. Be specific and actionable:
+
+{transcription_text}""",
+
+            'action_items': f"""Extract all action items, tasks, and next steps mentioned in the following transcription. List them clearly with any mentioned deadlines or responsible parties:
+
+{transcription_text}""",
+
+            'outline': f"""Create a structured outline of the following transcription. Organize it hierarchically with main topics, subtopics, and key points. Use a clear outline format (I, II, III or 1, 2, 3):
+
+{transcription_text}""",
+
+            'meeting_notes': f"""Format the following transcription as structured meeting notes. Include: Date/Time (if mentioned), Attendees/Participants (if identifiable), Agenda Topics, Discussion Summary, Decisions Made, and Action Items:
+
+{transcription_text}""",
+
+            'qa_format': f"""Extract and format all questions and answers from the following transcription. Present them in a clear Q&A format:
+
+{transcription_text}"""
+        }
+
+        if generation_type not in prompts:
+            return jsonify({'error': f'Invalid generation type: {generation_type}'}), 400
+
+        prompt = prompts[generation_type]
+
+        logger.info(f"Starting AI content generation, type: {generation_type}, text length: {len(transcription_text)}")
+
+        ollama_payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False
+        }
+
+        logger.info(f"Calling Ollama at {OLLAMA_URL}/api/generate with model {OLLAMA_MODEL}")
+
+        try:
+            # 5-minute timeout as requested
+            response = requests.post(f"{OLLAMA_URL}/api/generate",
+                                   json=ollama_payload,
+                                   timeout=300)
+        except requests.exceptions.Timeout:
+            logger.error(f"Ollama request timed out after 300 seconds for generation type: {generation_type}")
+            return jsonify({'error': 'AI generation timed out after 5 minutes. Please try again.'}), 500
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ollama request failed: {e}")
+            return jsonify({'error': 'Failed to connect to Ollama service'}), 500
+
+        if response.status_code != 200:
+            logger.error(f"Ollama service error: {response.text}")
+            return jsonify({'error': 'AI generation failed'}), 500
+
+        ollama_result = response.json()
+        generated_content = ollama_result.get('response', '').strip()
+
+        if not generated_content:
+            logger.warning(f"Empty AI response for generation type: {generation_type}")
+            return jsonify({'error': 'AI generated empty response'}), 500
+
+        logger.info(f"Successfully generated {generation_type}, content length: {len(generated_content)}")
+
+        return jsonify({
+            'success': True,
+            'content': generated_content,
+            'generation_type': generation_type,
+            'model': OLLAMA_MODEL
+        }), 200
+
+    except Exception as e:
+        logger.error(f"AI content generation error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 def generate_title(transcription_text):
     """Generate a concise title for transcription using Ollama"""
     try:
