@@ -862,6 +862,55 @@ def summarize():
         logger.error(f"Summarization error: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/regenerate-title', methods=['POST'])
+def regenerate_title():
+    """Regenerate title for transcription using Ollama"""
+    try:
+        data = request.get_json()
+        if not data or 'transcription_id' not in data or 'transcription_text' not in data:
+            return jsonify({'error': 'Transcription ID and text required'}), 400
+
+        transcription_id = data['transcription_id']
+        transcription_text = data['transcription_text']
+
+        logger.info(f"Regenerating title for transcription ID {transcription_id}")
+
+        # Generate new title
+        new_title = generate_title(transcription_text)
+
+        if not new_title:
+            return jsonify({'error': 'Failed to generate title. Please try again.'}), 500
+
+        # Update database with new title
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE transcriptions
+                SET title = %s
+                WHERE id = %s
+            """, (new_title, transcription_id))
+
+            conn.commit()
+            cursor.close()
+
+            logger.info(f"Successfully regenerated title for transcription ID {transcription_id}: {new_title}")
+
+            return jsonify({
+                'success': True,
+                'title': new_title
+            }), 200
+
+        finally:
+            return_db_connection(conn)
+
+    except Exception as e:
+        logger.error(f"Title regeneration error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 def generate_title(transcription_text):
     """Generate a concise title for transcription using Ollama"""
     try:
@@ -886,9 +935,9 @@ Title:"""
         try:
             response = requests.post(f"{OLLAMA_URL}/api/generate",
                                    json=ollama_payload,
-                                   timeout=30)  # Short timeout for titles
+                                   timeout=300)  # 5 minute timeout for title generation
         except requests.exceptions.Timeout:
-            logger.warning("Title generation timed out, using default")
+            logger.warning("Title generation timed out after 5 minutes, using default")
             return None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Title generation failed: {e}")

@@ -142,7 +142,7 @@
             </div>
             
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                <a href="http://localhost:5002" target="_blank" 
+                <a :href="getServiceUrl(5002)" target="_blank"
                    class="bg-white dark:bg-gray-800 rounded-lg p-6 card-hover block">
                     <div class="flex items-center mb-4">
                         <i class="fas fa-cog text-blue-600 text-2xl mr-4"></i>
@@ -150,8 +150,8 @@
                     </div>
                     <p class="text-gray-600 dark:text-gray-300">Manage AI models, voices, schedules, and memories</p>
                 </a>
-                
-                <a href="http://localhost:5003" target="_blank"
+
+                <a :href="getServiceUrl(5003)" target="_blank"
                    class="bg-white dark:bg-gray-800 rounded-lg p-6 card-hover block">
                     <div class="flex items-center mb-4">
                         <i class="fas fa-microphone text-green-600 text-2xl mr-4"></i>
@@ -160,7 +160,7 @@
                     <p class="text-gray-600 dark:text-gray-300">Generate and clone voices with multiple TTS engines</p>
                 </a>
 
-                <a href="http://localhost:5008" target="_blank"
+                <a :href="getServiceUrl(5008)" target="_blank"
                    class="bg-white dark:bg-gray-800 rounded-lg p-6 card-hover block">
                     <div class="flex items-center mb-4">
                         <i class="fas fa-closed-captioning text-indigo-600 text-2xl mr-4"></i>
@@ -169,7 +169,7 @@
                     <p class="text-gray-600 dark:text-gray-300">Advanced audio/video transcription with AI speaker recognition</p>
                 </a>
 
-                <a href="https://localhost:8081" target="_blank"
+                <a :href="getServiceUrl(8081, true)" target="_blank"
                    class="bg-white dark:bg-gray-800 rounded-lg p-6 card-hover block">
                     <div class="flex items-center mb-4">
                         <i class="fas fa-globe text-purple-600 text-2xl mr-4"></i>
@@ -289,10 +289,10 @@
                     <h4 class="text-lg font-semibold mb-4">Quick Links</h4>
                     <ul class="space-y-2">
                         <li><a href="https://github.com/chartmann1590/Mumble-AI.git" target="_blank" class="text-gray-300 hover:text-white">GitHub Repository</a></li>
-                        <li><a href="http://localhost:5002" target="_blank" class="text-gray-300 hover:text-white">Web Control Panel</a></li>
-                        <li><a href="http://localhost:5003" target="_blank" class="text-gray-300 hover:text-white">TTS Voice Generator</a></li>
-                        <li><a href="http://localhost:5008" target="_blank" class="text-gray-300 hover:text-white">Whisper Transcription</a></li>
-                        <li><a href="https://localhost:8081" target="_blank" class="text-gray-300 hover:text-white">Mumble Web Client</a></li>
+                        <li><a :href="getServiceUrl(5002)" target="_blank" class="text-gray-300 hover:text-white">Web Control Panel</a></li>
+                        <li><a :href="getServiceUrl(5003)" target="_blank" class="text-gray-300 hover:text-white">TTS Voice Generator</a></li>
+                        <li><a :href="getServiceUrl(5008)" target="_blank" class="text-gray-300 hover:text-white">Whisper Transcription</a></li>
+                        <li><a :href="getServiceUrl(8081, true)" target="_blank" class="text-gray-300 hover:text-white">Mumble Web Client</a></li>
                     </ul>
                 </div>
                 
@@ -404,7 +404,13 @@
                 refreshStatus() {
                     this.loadServices();
                 },
-                
+
+                getServiceUrl(port, useHttps = false) {
+                    const protocol = useHttps ? 'https' : 'http';
+                    const hostname = window.location.hostname;
+                    return `${protocol}://${hostname}:${port}`;
+                },
+
                 getStatusIcon(status) {
                     switch (status) {
                         case 'healthy': return 'fas fa-check-circle';

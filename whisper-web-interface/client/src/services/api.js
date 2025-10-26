@@ -42,6 +42,14 @@ export const summarizeTranscription = async (transcriptionId, transcriptionText)
   return response.data;
 };
 
+export const regenerateTitle = async (transcriptionId, transcriptionText) => {
+  const response = await api.post('/regenerate-title', {
+    transcription_id: transcriptionId,
+    transcription_text: transcriptionText,
+  });
+  return response.data;
+};
+
 export const getTranscriptions = async (page = 1, perPage = 10, search = '') => {
   const response = await api.get('/transcriptions', {
     params: { page, per_page: perPage, search },

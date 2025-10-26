@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock, Globe, Users, Trash2, FileText } from 'lucide-react';
-import { getTranscription, deleteTranscription } from '../services/api';
+import { ArrowLeft, Clock, Globe, Users, Trash2, FileText, Sparkles } from 'lucide-react';
+import { getTranscription, deleteTranscription, regenerateTitle } from '../services/api';
 import { formatFileSize, formatDuration, formatDate, formatLanguage, getSpeakerCount } from '../utils/formatters';
 import SummaryPanel from '../components/SummaryPanel';
 import TimelineView from '../components/TimelineView';
@@ -17,6 +17,7 @@ function TranscriptionDetailPage() {
   const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState('formatted');
   const [currentSegments, setCurrentSegments] = useState(null);
+  const [regeneratingTitle, setRegeneratingTitle] = useState(false);
 
   useEffect(() => {
     loadTranscription();
@@ -67,6 +68,27 @@ function TranscriptionDetailPage() {
     }));
   };
 
+  const handleRegenerateTitle = async () => {
+    if (!window.confirm('Generate a new AI title for this transcription? This may take up to 5 minutes.')) {
+      return;
+    }
+
+    setRegeneratingTitle(true);
+    try {
+      const result = await regenerateTitle(id, transcription.transcription_text);
+      setTranscription(prev => ({
+        ...prev,
+        title: result.title
+      }));
+      alert('Title regenerated successfully!');
+    } catch (err) {
+      console.error('Error regenerating title:', err);
+      alert('Failed to regenerate title. Please try again.');
+    } finally {
+      setRegeneratingTitle(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -104,9 +126,20 @@ function TranscriptionDetailPage() {
           <div className="bg-white rounded-lg shadow-md p-6">
             <div className="flex items-start justify-between">
               <div className="flex-1">
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">
-                  {transcription.title || transcription.filename}
-                </h1>
+                <div className="flex items-center gap-3 mb-2">
+                  <h1 className="text-3xl font-bold text-gray-900">
+                    {transcription.title || transcription.filename}
+                  </h1>
+                  <button
+                    onClick={handleRegenerateTitle}
+                    disabled={regeneratingTitle}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    title="Generate new AI title"
+                  >
+                    <Sparkles className={`w-4 h-4 ${regeneratingTitle ? 'animate-spin' : ''}`} />
+                    {regeneratingTitle ? 'Generating...' : 'Magic Title'}
+                  </button>
+                </div>
                 {transcription.title && (
                   <p className="text-sm text-gray-500 mb-4">
                     <FileText className="w-4 h-4 inline mr-1" />
