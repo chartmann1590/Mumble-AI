@@ -89,17 +89,24 @@ const SERVICES = {
     externalPort: 5005,
     allow503: true // This service returns 503 when not ready but is still running
   },
-  'email-summary-service': { 
-    host: 'email-summary-service', 
-    port: 5006, 
-    name: 'Email Summary Service', 
+  'email-summary-service': {
+    host: 'email-summary-service',
+    port: 5006,
+    name: 'Email Summary Service',
     healthPath: '/health',
     externalPort: 5006
   },
-  'mumble-web': { 
-    host: 'mumble-web-nginx', 
-    port: 443, 
-    name: 'Mumble Web', 
+  'whisper-web-interface': {
+    host: 'whisper-web-interface',
+    port: 5008,
+    name: 'Whisper Transcription',
+    healthPath: '/health',
+    externalPort: 5008
+  },
+  'mumble-web': {
+    host: 'mumble-web-nginx',
+    port: 443,
+    name: 'Mumble Web',
     healthPath: '/',
     externalPort: 8081,
     useHttps: true

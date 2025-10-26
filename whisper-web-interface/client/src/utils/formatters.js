@@ -61,13 +61,13 @@ export const formatLanguage = (language, probability) => {
 
 export const formatText = (text) => {
   if (!text) return '';
-  
-  // Split text into sentences and add proper spacing
+
+  // Improve text formatting for better readability
   return text
-    .replace(/([.!?])\s*([A-Z])/g, '$1\n\n$2') // Add paragraph breaks after sentences
-    .replace(/([.!?])\s*([A-Z][a-z])/g, '$1\n\n$2') // Handle lowercase after periods
-    .replace(/\n{3,}/g, '\n\n') // Remove excessive line breaks
-    .trim();
+    .split(/\n+/) // Split by line breaks
+    .map(paragraph => paragraph.trim()) // Trim each paragraph
+    .filter(paragraph => paragraph.length > 0) // Remove empty paragraphs
+    .join('\n\n'); // Join with double line breaks for clear separation
 };
 
 export const formatTimestamp = (seconds) => {
@@ -85,23 +85,49 @@ export const formatTimestamp = (seconds) => {
 
 export const formatSegmentText = (segments) => {
   if (!segments || !Array.isArray(segments)) return '';
-  
-  let result = '';
+
+  let result = [];
   let currentSpeaker = null;
-  
-  for (const seg of segments) {
+  let currentBlock = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
     const timestamp = formatTimestamp(seg.start);
     const speaker = seg.speaker || 'Speaker 1';
-    
+
     if (speaker !== currentSpeaker) {
+      // Save previous speaker's block
+      if (currentBlock.length > 0 && currentSpeaker) {
+        result.push({
+          speaker: currentSpeaker,
+          segments: currentBlock
+        });
+      }
+
+      // Start new speaker block
       currentSpeaker = speaker;
-      result += `\n\n[${timestamp}] ${speaker}:\n${seg.text}`;
+      currentBlock = [{ timestamp, text: seg.text }];
     } else {
-      result += ` [${timestamp}] ${seg.text}`;
+      // Continue current speaker's block
+      currentBlock.push({ timestamp, text: seg.text });
     }
   }
-  
-  return result.trim();
+
+  // Add final block
+  if (currentBlock.length > 0 && currentSpeaker) {
+    result.push({
+      speaker: currentSpeaker,
+      segments: currentBlock
+    });
+  }
+
+  // Format as readable conversation
+  return result.map(block => {
+    const firstTimestamp = block.segments[0].timestamp;
+    const speakerLine = `${block.speaker} (${firstTimestamp})`;
+    const textLines = block.segments.map(s => s.text.trim()).join(' ');
+    return `${speakerLine}\n${textLines}`;
+  }).join('\n\n');
 };
 
 export const getSpeakerCount = (segments) => {

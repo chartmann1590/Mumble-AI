@@ -437,10 +437,119 @@ COMMENT ON COLUMN transcriptions.user_identifier IS 'Optional user identifier fo
 -- Add columns for segments and formatted transcription
 ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS transcription_segments JSONB;
 ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS transcription_formatted TEXT;
+ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS speaker_mappings JSONB;
+ALTER TABLE transcriptions ADD COLUMN IF NOT EXISTS title VARCHAR(500);
 
 -- Add indexes for JSONB queries
 CREATE INDEX IF NOT EXISTS idx_transcriptions_segments ON transcriptions USING GIN (transcription_segments);
+CREATE INDEX IF NOT EXISTS idx_transcriptions_speaker_mappings ON transcriptions USING GIN (speaker_mappings);
 
 -- Add comments
 COMMENT ON COLUMN transcriptions.transcription_segments IS 'Structured JSON with segments, timestamps, and speaker labels';
 COMMENT ON COLUMN transcriptions.transcription_formatted IS 'Formatted text with inline timestamps and speaker labels';
+COMMENT ON COLUMN transcriptions.speaker_mappings IS 'User-defined speaker name mappings (e.g., {"Speaker 1": "John", "Speaker 2": "Mary"})';
+
+-- Create speaker_profiles table for persistent speaker recognition
+CREATE TABLE IF NOT EXISTS speaker_profiles (
+    id SERIAL PRIMARY KEY,
+    speaker_name VARCHAR(255) NOT NULL UNIQUE,
+    voice_embedding FLOAT8[] NOT NULL,
+    sample_count INTEGER DEFAULT 1,
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total_duration_seconds FLOAT DEFAULT 0,
+    description TEXT,
+    tags TEXT[],
+    confidence_score FLOAT DEFAULT 1.0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Create indexes for speaker_profiles
+CREATE INDEX IF NOT EXISTS idx_speaker_name ON speaker_profiles(speaker_name);
+CREATE INDEX IF NOT EXISTS idx_speaker_active ON speaker_profiles(is_active);
+CREATE INDEX IF NOT EXISTS idx_speaker_last_seen ON speaker_profiles(last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_speaker_tags ON speaker_profiles USING GIN(tags);
+CREATE INDEX IF NOT EXISTS idx_speaker_embedding ON speaker_profiles USING GIN(voice_embedding);
+
+-- Create speaker_transcription_mapping table to track speaker appearances
+CREATE TABLE IF NOT EXISTS speaker_transcription_mapping (
+    id SERIAL PRIMARY KEY,
+    transcription_id INTEGER NOT NULL REFERENCES transcriptions(id) ON DELETE CASCADE,
+    speaker_profile_id INTEGER REFERENCES speaker_profiles(id) ON DELETE SET NULL,
+    detected_speaker_label VARCHAR(100) NOT NULL,
+    segment_count INTEGER DEFAULT 0,
+    total_duration_seconds FLOAT DEFAULT 0,
+    average_embedding FLOAT8[],
+    similarity_score FLOAT,
+    is_confirmed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for speaker_transcription_mapping
+CREATE INDEX IF NOT EXISTS idx_speaker_mapping_transcription ON speaker_transcription_mapping(transcription_id);
+CREATE INDEX IF NOT EXISTS idx_speaker_mapping_profile ON speaker_transcription_mapping(speaker_profile_id);
+CREATE INDEX IF NOT EXISTS idx_speaker_mapping_label ON speaker_transcription_mapping(detected_speaker_label);
+CREATE INDEX IF NOT EXISTS idx_speaker_mapping_confirmed ON speaker_transcription_mapping(is_confirmed);
+
+-- Create update trigger for speaker_profiles updated_at
+CREATE OR REPLACE FUNCTION update_speaker_profiles_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_speaker_profiles_updated_at
+    BEFORE UPDATE ON speaker_profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION update_speaker_profiles_updated_at();
+
+-- Add comments for speaker tables
+COMMENT ON TABLE speaker_profiles IS 'Stores known speaker voice profiles with embeddings for cross-transcription speaker recognition';
+COMMENT ON COLUMN speaker_profiles.voice_embedding IS 'Average voice embedding vector from Resemblyzer for speaker identification';
+COMMENT ON COLUMN speaker_profiles.sample_count IS 'Number of audio segments used to build this profile';
+COMMENT ON COLUMN speaker_profiles.total_duration_seconds IS 'Total audio duration used for this speaker profile';
+COMMENT ON COLUMN speaker_profiles.confidence_score IS 'Confidence score for this speaker profile (0-1)';
+COMMENT ON TABLE speaker_transcription_mapping IS 'Links detected speakers in transcriptions to known speaker profiles';
+COMMENT ON COLUMN speaker_transcription_mapping.similarity_score IS 'Cosine similarity score between detected speaker and matched profile';
+COMMENT ON COLUMN speaker_transcription_mapping.is_confirmed IS 'Whether the speaker match has been confirmed by user';
+
+-- Function to calculate average embedding (useful for speaker profiles)
+CREATE OR REPLACE FUNCTION average_embedding(embeddings FLOAT8[][])
+RETURNS FLOAT8[] AS $$
+DECLARE
+    result FLOAT8[];
+    sum_arr FLOAT8[];
+    emb FLOAT8[];
+    i INTEGER;
+    count INTEGER := 0;
+BEGIN
+    IF embeddings IS NULL OR array_length(embeddings, 1) IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- Initialize sum array with zeros
+    sum_arr := ARRAY_FILL(0.0::FLOAT8, ARRAY[array_length(embeddings[1], 1)]);
+
+    -- Sum all embeddings
+    FOREACH emb SLICE 1 IN ARRAY embeddings LOOP
+        count := count + 1;
+        FOR i IN 1..array_length(emb, 1) LOOP
+            sum_arr[i] := sum_arr[i] + emb[i];
+        END LOOP;
+    END LOOP;
+
+    -- Average
+    IF count > 0 THEN
+        FOR i IN 1..array_length(sum_arr, 1) LOOP
+            sum_arr[i] := sum_arr[i] / count;
+        END LOOP;
+    END IF;
+
+    RETURN sum_arr;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;

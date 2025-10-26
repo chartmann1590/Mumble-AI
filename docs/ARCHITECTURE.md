@@ -4,7 +4,7 @@ System design and component interaction documentation.
 
 ## Overview
 
-Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 14 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, SIP phone integration, email communication, and mobile app access.
+Mumble AI Bot is a microservices-based voice AI system built on Docker. It consists of 15 primary services that work together to provide voice and text interaction through multiple access methods including Mumble VoIP, web clients, SIP phone integration, email communication, transcription services, and mobile app access.
 
 ## Component Diagram
 
@@ -16,8 +16,8 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │  │(Desktop/Mobile│  │(Port 8081)   │  │(Port 5060)  │  │(Control Panel)  │ │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
-│  │Android App   │  │ Landing Page │  │ Email Client │  │ Mobile Browser  │ │
-│  │(Flutter Beta)│  │(Port 5007)   │  │(IMAP/SMTP)   │  │(All Services)   │ │
+│  │Android App   │  │ Landing Page │  │ Email Client │  │ Whisper Web UI  │ │
+│  │(Flutter Beta)│  │(Port 5007)   │  │(IMAP/SMTP)   │  │(Port 5008)      │ │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
 └─────────┼──────────────────┼──────────────────┼───────────────────┼─────────┘
           │                  │                  │                   │
@@ -31,8 +31,11 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 │       ┌────▼──────┐           │          ┌──────────────┐  ┌─────────────┐  │
 │       │  AI Bot   │           │          │ Landing Page │  │ TTS Voice   │  │
 │       └─┬───┬───┬─┘           │          │(Port 5007)   │  │ Generator   │  │
-│         │   │   │             │          └──────────────┘  │(Port 5003)  │  │
-└─────────┼───┼───┼─────────────┼─────────────────────────────└─────────────┘  │
+│         │   │   │             │          ├──────────────┤  │(Port 5003)  │  │
+│         │   │   │             │          │ Whisper Web  │  └─────────────┘  │
+│         │   │   │             │          │ Interface    │                    │
+│         │   │   │             │          │(Port 5008)   │                    │
+└─────────┼───┼───┼─────────────┼──────────└──────────────┘──────────────────┘  │
           │   │   │             │
 ┌─────────▼───▼───▼─────────────▼────────────────────────────────────────────┐
 │                            Service Layer                                    │
@@ -124,6 +127,30 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 6. Comprehensive logging system captures all actions
 7. Logs auto-sync to server every 50 entries
 8. Server-side log viewer available at `/logs` endpoint
+
+### Whisper Web Interface Flow
+
+1. User accesses Whisper Web Interface in browser (`http://localhost:5008`)
+2. User uploads audio or video file (drag-and-drop or file selector)
+3. Frontend sends file to `/api/upload` endpoint
+4. Backend validates file (format, size) and saves to temporary location
+5. Frontend initiates transcription via `/api/transcribe` endpoint
+6. Backend extracts audio from video files (if needed) using pydub/FFmpeg
+7. Audio sent to Faster Whisper service for speech-to-text conversion
+8. Backend performs advanced speaker diarization:
+   - Extracts voice embeddings using Resemblyzer (256-dim vectors)
+   - Performs Agglomerative Clustering with Ward linkage
+   - Tests 2-8 speaker configurations, selects optimal using silhouette score
+   - Matches detected speakers to stored voice profiles (75% similarity threshold)
+   - Returns speaker-labeled segments with match confidence scores
+9. Backend generates AI title using Ollama (first 2000 chars of transcription)
+10. Transcription, segments, speaker matches, and title saved to PostgreSQL
+11. Frontend redirects to individual transcription detail page (`/transcription/:id`)
+12. User can name unknown speakers via Speaker Manager component
+13. Naming speakers creates/updates voice profiles in database
+14. Future transcriptions automatically recognize named speakers
+15. User can generate AI summary via Summary Panel (using Ollama)
+16. User can browse history, search transcriptions, and navigate with pagination
 
 ## Services
 
@@ -271,6 +298,37 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
   - Customizable themes
   - Development-friendly
 
+### 14. Whisper Web Interface
+
+- **Image:** Custom (Python 3.11 + Node.js multi-stage build)
+- **Purpose:** Advanced audio/video transcription with persistent speaker recognition
+- **Port:** 5008
+- **Dependencies:** PostgreSQL, Faster Whisper, Ollama
+- **Technology Stack:**
+  - **Backend:** Flask, Resemblyzer, scikit-learn, pydub, librosa 0.9.2
+  - **Frontend:** React 18, React Router v6, Vite, Tailwind CSS, Axios
+- **Features:**
+  - **Advanced Speaker Diarization:** Aggressive multi-speaker detection using Resemblyzer voice embeddings
+  - **Persistent Speaker Profiles:** Cross-session speaker recognition with 75% similarity threshold
+  - **AI-Generated Titles:** Automatic intelligent title generation using Ollama
+  - **Modern React UI:** Single-page application with React Router navigation
+  - **Card-Based History:** Beautiful 3-column grid with pagination (10 items/page)
+  - **Individual Transcription Pages:** Dedicated detail pages for each transcription
+  - **Speaker Management UI:** Name speakers, view confidence scores, manage profiles
+  - **AI Summarization:** Ollama-powered summaries with model selection
+  - **Multi-Format Support:** Audio (.mp3, .wav, .ogg, .flac, .aac, .m4a) and video (.mp4, .webm, .avi, .mov, .mkv)
+  - **Full-Text Search:** Search across titles, filenames, and content
+  - **Voice Profile Database:** 256-dimensional embeddings stored in PostgreSQL
+  - **Weighted Profile Updates:** Profiles improve with each new sample
+- **API Endpoints:**
+  - `/api/upload` - File upload and validation
+  - `/api/transcribe` - Transcription with speaker detection
+  - `/api/transcriptions` - List with pagination and search
+  - `/api/transcriptions/<id>` - Get single transcription
+  - `/api/speakers` - Speaker profile management
+  - `/api/summarize` - AI summary generation
+  - `/health` - Health check
+
 ## Database Schema
 
 ### conversation_history
@@ -373,6 +431,78 @@ Mumble AI Bot is a microservices-based voice AI system built on Docker. It consi
 | device_info | JSONB | Device information (platform, timestamp) |
 | created_at | TIMESTAMP | When log was created |
 
+### transcriptions
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| filename | VARCHAR(255) | Original filename |
+| title | VARCHAR(500) | AI-generated title |
+| original_format | VARCHAR(10) | File format (mp3, wav, etc.) |
+| file_size_bytes | BIGINT | File size in bytes |
+| duration_seconds | FLOAT | Audio duration |
+| transcription_text | TEXT | Full transcription text |
+| transcription_segments | JSONB | Array of {start, end, text, speaker} objects |
+| transcription_formatted | TEXT | Human-readable text with speakers |
+| summary_text | TEXT | AI-generated summary |
+| summary_model | VARCHAR(50) | Ollama model used for summary |
+| language | VARCHAR(10) | Detected language code |
+| language_probability | FLOAT | Language detection confidence |
+| processing_time_seconds | FLOAT | Total processing time |
+| created_at | TIMESTAMP | When transcription was created |
+| updated_at | TIMESTAMP | Last update time |
+
+**Indexes:**
+- `idx_transcriptions_created_at` - Optimizes history page ordering
+- `idx_transcriptions_language` - Optimizes language filtering
+- `idx_transcriptions_title` - Optimizes search performance
+
+### speaker_profiles
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| speaker_name | VARCHAR(255) | Speaker name (unique) |
+| voice_embedding | FLOAT8[] | 256-dimensional Resemblyzer voice fingerprint |
+| sample_count | INTEGER | Number of voice samples collected |
+| first_seen | TIMESTAMP | When speaker was first detected |
+| last_seen | TIMESTAMP | When speaker was last detected |
+| total_duration_seconds | FLOAT | Total speaking time across all transcriptions |
+| description | TEXT | Optional speaker description |
+| tags | TEXT[] | Array of tags for categorization |
+| confidence_score | FLOAT | Overall profile confidence (1.0 = highest) |
+| is_active | BOOLEAN | Whether profile is active (soft delete) |
+| created_at | TIMESTAMP | When profile was created |
+| updated_at | TIMESTAMP | Last update time |
+| metadata | JSONB | Additional metadata |
+
+**Indexes:**
+- `idx_speaker_profiles_name` - Optimizes name lookups
+- `idx_speaker_profiles_active` - Optimizes active profile queries
+
+### speaker_transcription_mapping
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| transcription_id | INTEGER | Foreign key to transcriptions table |
+| speaker_profile_id | INTEGER | Foreign key to speaker_profiles table (nullable) |
+| detected_speaker_label | VARCHAR(100) | Original detected label (Speaker 1, Speaker 2, etc.) |
+| segment_count | INTEGER | Number of segments by this speaker |
+| total_duration_seconds | FLOAT | Total speaking time in this transcription |
+| average_embedding | FLOAT8[] | Average voice embedding for this speaker |
+| similarity_score | FLOAT | Similarity to matched profile (0.0-1.0) |
+| is_confirmed | BOOLEAN | Whether match was confirmed by user |
+| created_at | TIMESTAMP | When mapping was created |
+
+**Indexes:**
+- `idx_mapping_transcription` - Optimizes transcription queries
+- `idx_mapping_profile` - Optimizes profile queries
+
+**Constraints:**
+- `transcription_id` references `transcriptions(id)` ON DELETE CASCADE
+- `speaker_profile_id` references `speaker_profiles(id)` ON DELETE SET NULL
+
 ## Audio Processing
 
 ### Input Audio (Mumble → Whisper)
@@ -422,7 +552,10 @@ mumble-ai-network (bridge)
 ├── web-control-panel (5002)
 ├── tts-voice-generator (5003)
 ├── silero-tts (5004)
+├── chatterbox-tts (5005)
+├── email-summary-service (5006)
 ├── sip-mumble-bridge (5060, 10000-10010)
+├── whisper-web-interface (5008)
 ├── mumble-web (8081)
 ├── postgres (5432 internal)
 └── mumble-bot (client only)
@@ -431,7 +564,12 @@ mumble-ai-network (bridge)
 External:
 - Ollama: host.docker.internal:11434
 - SIP Phones: localhost:5060
-- Web Browsers: localhost:8081, localhost:5002, localhost:5003
+- Web Browsers:
+  - Mumble Web Client: localhost:8081
+  - Web Control Panel: localhost:5002
+  - TTS Voice Generator: localhost:5003
+  - Whisper Web Interface: localhost:5008
+  - Landing Page: localhost:5007
 
 ## Monitoring
 

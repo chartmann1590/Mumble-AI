@@ -18,9 +18,9 @@ RUN npm run build
 # Stage 2: Python backend with frontend
 FROM python:3.11-slim
 
-# Install system dependencies including ffmpeg
+# Install system dependencies including ffmpeg and build tools
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y ffmpeg gcc g++ make && \
     rm -rf /var/lib/apt/lists/*
 
 # Set working directory

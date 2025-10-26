@@ -59,4 +59,45 @@ export const deleteTranscription = async (id) => {
   return response.data;
 };
 
+export const updateSpeakers = async (id, speakerMappings) => {
+  const response = await api.post(`/transcriptions/${id}/update-speakers`, {
+    speaker_mappings: speakerMappings,
+  });
+  return response.data;
+};
+
+export const updateSegmentSpeakers = async (id, segmentUpdates) => {
+  const response = await api.post(`/transcriptions/${id}/update-segment-speakers`, {
+    segment_updates: segmentUpdates,
+  });
+  return response.data;
+};
+
+// Speaker profile management
+export const getSpeakers = async () => {
+  const response = await api.get('/speakers');
+  return response.data;
+};
+
+export const createSpeakerProfile = async (speakerName, transcriptionId, detectedSpeakerLabel, description = '', tags = []) => {
+  const response = await api.post('/speakers', {
+    speaker_name: speakerName,
+    transcription_id: transcriptionId,
+    detected_speaker_label: detectedSpeakerLabel,
+    description,
+    tags,
+  });
+  return response.data;
+};
+
+export const updateSpeakerProfile = async (profileId, data) => {
+  const response = await api.put(`/speakers/${profileId}`, data);
+  return response.data;
+};
+
+export const deleteSpeakerProfile = async (profileId) => {
+  const response = await api.delete(`/speakers/${profileId}`);
+  return response.data;
+};
+
 export default api;

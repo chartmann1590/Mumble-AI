@@ -83,16 +83,21 @@ A comprehensive AI-powered voice assistant ecosystem for Mumble VoIP servers wit
 - **Download Support**: Generate and download high-quality WAV files
 - **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
 
-### 🎙️ Whisper Web Interface (🆕 NEW)
-- **Modern Transcription UI**: Beautiful React-based interface for audio/video transcription
+### 🎙️ Whisper Web Interface (🆕 **ENHANCED**)
+- **Modern React UI**: Beautiful single-page application with React Router navigation
+- **AI-Generated Titles**: Automatic intelligent title generation for all transcriptions using Ollama
+- **Card-Based History**: Beautiful 3-column grid layout with hover effects and pagination (10 items/page)
+- **Individual Transcription Pages**: Dedicated detail pages for each transcription with full metadata
+- **Advanced Speaker Recognition**: Aggressive multi-speaker detection with Resemblyzer voice embeddings
+- **Persistent Speaker Profiles**: Remember and auto-recognize speakers across all transcriptions
+- **Speaker Management UI**: Name speakers, view recognition confidence, and manage voice profiles
+- **Voice Matching**: 75% similarity threshold with cosine similarity for cross-session recognition
+- **Timeline View**: Interactive segment-by-segment timeline with speaker color coding
 - **Multi-Format Support**: Audio (.mp3, .wav, .ogg, .flac, .aac, .m4a) and video (.mp4, .webm, .avi, .mov, .mkv) files
-- **AI Summarization**: Optional AI-powered summaries using Ollama integration
-- **Real-Time Processing**: Live transcription progress and status updates
-- **Database Storage**: PostgreSQL integration for transcription history and metadata
-- **Search & Filter**: Advanced search through transcription history with filtering
-- **Responsive Design**: Works perfectly on desktop, tablet, and mobile devices
-- **File Management**: Upload, process, and manage transcription files up to 100MB
-- **Export Options**: Download transcriptions in various formats
+- **AI Summarization**: Ollama-powered intelligent summaries with model selection
+- **Search & Pagination**: Full-text search with clean pagination controls
+- **Database Integration**: PostgreSQL with speaker profiles, embeddings, and mapping tables
+- **Responsive Design**: Mobile-friendly with Tailwind CSS styling
 
 ### 📱 Android Mobile App (🧪 Beta Testing)
 

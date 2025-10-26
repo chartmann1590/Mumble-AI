@@ -87,9 +87,11 @@ const SummaryPanel = ({ transcriptionId, transcriptionText, summaryText, summary
             </div>
           ) : summary ? (
             <div className="space-y-3">
-              <div className="bg-white rounded-lg p-4 border border-gray-200">
-                <div className="text-gray-700 leading-relaxed whitespace-pre-wrap text-sm">
-                  {formatText(summary)}
+              <div className="bg-white rounded-lg p-6 border border-gray-200 shadow-sm">
+                <div className="prose prose-sm max-w-none">
+                  <div className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                    {formatText(summary)}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center space-x-2 pt-2">

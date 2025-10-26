@@ -15,12 +15,15 @@ import { formatFileSize, formatDuration, formatDate, formatLanguage, formatText,
 import { deleteTranscription } from '../services/api';
 import SummaryPanel from './SummaryPanel';
 import TimelineView from './TimelineView';
+import SpeakerEditor from './SpeakerEditor';
+import SpeakerManager from './SpeakerManager';
 
 const TranscriptionCard = ({ transcription, onDelete, onUpdate }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [viewMode, setViewMode] = useState('inline');
+  const [currentSegments, setCurrentSegments] = useState(transcription.transcription_segments);
 
   const handleCopy = async () => {
     try {
@@ -51,6 +54,27 @@ const TranscriptionCard = ({ transcription, onDelete, onUpdate }) => {
 
   const handleSummaryUpdate = (updatedTranscription) => {
     onUpdate(updatedTranscription);
+  };
+
+  const handleSpeakerUpdate = (updatedData) => {
+    // Update local state
+    setCurrentSegments(updatedData.transcription_segments);
+
+    // Update parent component
+    onUpdate({
+      ...transcription,
+      transcription_segments: updatedData.transcription_segments,
+      transcription_formatted: updatedData.transcription_formatted
+    });
+  };
+
+  const handleSpeakersSaved = () => {
+    // Trigger a refresh by notifying parent
+    // Parent should re-fetch transcription to get updated speaker labels
+    if (onUpdate) {
+      // Force a reload of the transcription from parent
+      window.location.reload(); // Simple approach for now
+    }
   };
 
   return (
@@ -161,25 +185,50 @@ const TranscriptionCard = ({ transcription, onDelete, onUpdate }) => {
                 )}
               </div>
               
-              {transcription.transcription_segments && transcription.transcription_segments.length > 0 ? (
+              {currentSegments && currentSegments.length > 0 ? (
                 viewMode === 'inline' ? (
-                  <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto">
-                    <div className="text-gray-700 leading-relaxed whitespace-pre-wrap text-sm font-mono">
-                      {formatSegmentText(transcription.transcription_segments)}
+                  <div className="bg-gray-50 rounded-lg p-6 max-h-96 overflow-y-auto border border-gray-200">
+                    <div className="prose prose-sm max-w-none">
+                      <div className="text-gray-800 leading-relaxed whitespace-pre-wrap space-y-4">
+                        {formatSegmentText(currentSegments)}
+                      </div>
                     </div>
                   </div>
                 ) : (
-                  <TimelineView segments={transcription.transcription_segments} />
+                  <TimelineView 
+                    transcriptionId={transcription.id}
+                    segments={currentSegments} 
+                    onUpdate={handleSpeakerUpdate}
+                  />
                 )
               ) : (
-                <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto">
-                  <div className="text-gray-700 leading-relaxed whitespace-pre-wrap text-sm">
-                    {formatText(transcription.transcription_text)}
+                <div className="bg-gray-50 rounded-lg p-6 max-h-96 overflow-y-auto border border-gray-200">
+                  <div className="prose prose-sm max-w-none">
+                    <div className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                      {formatText(transcription.transcription_text)}
+                    </div>
                   </div>
                 </div>
               )}
             </div>
-            
+
+            {currentSegments && currentSegments.length > 0 && getSpeakerCount(currentSegments) > 0 && (
+              <>
+                <SpeakerManager
+                  transcriptionId={transcription.id}
+                  segments={currentSegments}
+                  speakerMatches={transcription.speaker_matches}
+                  onSpeakersSaved={handleSpeakersSaved}
+                />
+
+                <SpeakerEditor
+                  transcriptionId={transcription.id}
+                  segments={currentSegments}
+                  onUpdate={handleSpeakerUpdate}
+                />
+              </>
+            )}
+
             <SummaryPanel
               transcriptionId={transcription.id}
               transcriptionText={transcription.transcription_text}
