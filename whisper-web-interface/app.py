@@ -1224,6 +1224,7 @@ def export_transcript(transcription_id, format):
 
             elif format.lower() == 'pdf':
                 from xml.sax.saxutils import escape
+                from reportlab.lib import colors
 
                 # Create PDF document
                 file_stream = BytesIO()
@@ -1236,7 +1237,7 @@ def export_transcript(transcription_id, format):
                     'CustomHeader',
                     parent=styles['Heading1'],
                     fontSize=16,
-                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    textColor=colors.Color(99/255, 102/255, 241/255),  # Indigo
                     spaceAfter=10,
                     alignment=1,  # Center
                     fontName='Helvetica-Bold'
@@ -1246,7 +1247,7 @@ def export_transcript(transcription_id, format):
                     'CustomTitle',
                     parent=styles['Heading1'],
                     fontSize=24,
-                    textColor=RGBColor(31/255, 41/255, 55/255),  # Dark gray
+                    textColor=colors.Color(31/255, 41/255, 55/255),  # Dark gray
                     spaceAfter=15,
                     spaceBefore=10,
                     alignment=1,  # Center
@@ -1257,7 +1258,7 @@ def export_transcript(transcription_id, format):
                     'CustomMeta',
                     parent=styles['Normal'],
                     fontSize=11,
-                    textColor=RGBColor(107/255, 114/255, 128/255),  # Gray
+                    textColor=colors.Color(107/255, 114/255, 128/255),  # Gray
                     spaceAfter=30,
                     alignment=1,  # Center
                     fontName='Helvetica-Oblique'
@@ -1267,7 +1268,7 @@ def export_transcript(transcription_id, format):
                     'SectionHeader',
                     parent=styles['Heading2'],
                     fontSize=14,
-                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    textColor=colors.Color(99/255, 102/255, 241/255),  # Indigo
                     spaceAfter=12,
                     spaceBefore=15,
                     fontName='Helvetica-Bold'
@@ -1279,7 +1280,7 @@ def export_transcript(transcription_id, format):
                     fontSize=11,
                     leading=16,
                     spaceAfter=8,
-                    textColor=RGBColor(0, 0, 0)
+                    textColor=colors.Color(0, 0, 0)
                 )
 
                 # Build content
@@ -1293,7 +1294,7 @@ def export_transcript(transcription_id, format):
                 separator_data = [['_' * 100]]
                 separator_table = Table(separator_data, colWidths=[6.5*inch])
                 separator_table.setStyle([
-                    ('TEXTCOLOR', (0,0), (-1,-1), RGBColor(209/255, 213/255, 219/255)),
+                    ('TEXTCOLOR', (0,0), (-1,-1), colors.Color(209/255, 213/255, 219/255)),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ])
                 story.append(separator_table)
@@ -1528,6 +1529,7 @@ def export_ai_content(transcription_id, generation_type, format):
 
             elif format.lower() == 'pdf':
                 from xml.sax.saxutils import escape
+                from reportlab.lib import colors
                 import re
 
                 # Create PDF document
@@ -1541,7 +1543,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'CustomHeader',
                     parent=styles['Heading1'],
                     fontSize=16,
-                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    textColor=colors.Color(99/255, 102/255, 241/255),  # Indigo
                     spaceAfter=10,
                     alignment=1,  # Center
                     fontName='Helvetica-Bold'
@@ -1551,7 +1553,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'Badge',
                     parent=styles['Normal'],
                     fontSize=10,
-                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    textColor=colors.Color(99/255, 102/255, 241/255),  # Indigo
                     spaceAfter=10,
                     alignment=1,  # Center
                     fontName='Helvetica-Bold'
@@ -1561,7 +1563,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'CustomTitle',
                     parent=styles['Heading1'],
                     fontSize=22,
-                    textColor=RGBColor(31/255, 41/255, 55/255),  # Dark gray
+                    textColor=colors.Color(31/255, 41/255, 55/255),  # Dark gray
                     spaceAfter=15,
                     spaceBefore=5,
                     alignment=1,  # Center
@@ -1572,7 +1574,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'CustomMeta',
                     parent=styles['Normal'],
                     fontSize=10,
-                    textColor=RGBColor(107/255, 114/255, 128/255),  # Gray
+                    textColor=colors.Color(107/255, 114/255, 128/255),  # Gray
                     spaceAfter=30,
                     alignment=1,  # Center
                     fontName='Helvetica-Oblique'
@@ -1582,7 +1584,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'SectionHeader',
                     parent=styles['Heading2'],
                     fontSize=14,
-                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    textColor=colors.Color(99/255, 102/255, 241/255),  # Indigo
                     spaceAfter=12,
                     spaceBefore=15,
                     fontName='Helvetica-Bold'
@@ -1592,7 +1594,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'CustomHeading2',
                     parent=styles['Heading2'],
                     fontSize=14,
-                    textColor=RGBColor(79/255, 70/255, 229/255),  # Indigo variant
+                    textColor=colors.Color(79/255, 70/255, 229/255),  # Indigo variant
                     spaceAfter=8,
                     spaceBefore=12,
                     fontName='Helvetica-Bold'
@@ -1602,7 +1604,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     'CustomHeading3',
                     parent=styles['Heading3'],
                     fontSize=12,
-                    textColor=RGBColor(79/255, 70/255, 229/255),  # Indigo variant
+                    textColor=colors.Color(79/255, 70/255, 229/255),  # Indigo variant
                     spaceAfter=6,
                     spaceBefore=10,
                     fontName='Helvetica-Bold'
@@ -1614,7 +1616,7 @@ def export_ai_content(transcription_id, generation_type, format):
                     fontSize=11,
                     leading=16,
                     spaceAfter=8,
-                    textColor=RGBColor(0, 0, 0)
+                    textColor=colors.Color(0, 0, 0)
                 )
 
                 # Build content
@@ -1628,7 +1630,7 @@ def export_ai_content(transcription_id, generation_type, format):
                 separator_data = [['_' * 100]]
                 separator_table = Table(separator_data, colWidths=[6.5*inch])
                 separator_table.setStyle([
-                    ('TEXTCOLOR', (0,0), (-1,-1), RGBColor(209/255, 213/255, 219/255)),
+                    ('TEXTCOLOR', (0,0), (-1,-1), colors.Color(209/255, 213/255, 219/255)),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                 ])
                 story.append(separator_table)
