@@ -844,18 +844,18 @@ def summarize():
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE transcriptions 
+                UPDATE transcriptions
                 SET summary_text = %s, summary_model = %s
                 WHERE id = %s
-            """, (summary_text, OLLAMA_MODEL, transcription_id))
-            
+            """, (summary_text, ollama_model, transcription_id))
+
             conn.commit()
             cursor.close()
-            
+
             return jsonify({
                 'success': True,
                 'summary_text': summary_text,
-                'summary_model': OLLAMA_MODEL
+                'summary_model': ollama_model
             }), 200
             
         finally:
@@ -1044,7 +1044,7 @@ def generate_ai_content():
                             model = EXCLUDED.model,
                             updated_at = CURRENT_TIMESTAMP
                         RETURNING id
-                    """, (transcription_id, generation_type, generated_content, OLLAMA_MODEL))
+                    """, (transcription_id, generation_type, generated_content, ollama_model))
 
                     content_id = cursor.fetchone()[0]
                     conn.commit()
@@ -1061,7 +1061,7 @@ def generate_ai_content():
             'success': True,
             'content': generated_content,
             'generation_type': generation_type,
-            'model': OLLAMA_MODEL
+            'model': ollama_model
         }), 200
 
     except Exception as e:
