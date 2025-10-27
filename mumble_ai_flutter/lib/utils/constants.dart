@@ -58,6 +58,58 @@ class AppConstants {
   static const String memoryContextEndpoint = '/api/memory/context';
   static const String memoryStatsEndpoint = '/api/memory/stats';
 
+  // Whisper Web Transcription Service (port 5008)
+  static const int whisperPort = 5008;
+  static const String whisperTranscriptionsEndpoint = '/api/transcriptions';
+  static const String whisperUploadEndpoint = '/api/upload';
+  static const String whisperTranscribeEndpoint = '/api/transcribe';
+  static const String whisperSummarizeEndpoint = '/api/summarize';
+  static const String whisperRegenerateTitleEndpoint = '/api/regenerate-title';
+  static const String whisperGenerateAIContentEndpoint = '/api/generate-ai-content';
+  static const String whisperGetAIContentEndpoint = '/api/get-ai-content';
+  static const String whisperExportTranscriptEndpoint = '/api/export-transcript';
+  static const String whisperExportAIContentEndpoint = '/api/export-ai-content';
+  static const String whisperSpeakersEndpoint = '/api/speakers';
+  static const String whisperSettingsEndpoint = '/api/settings';
+  static const String whisperTestOllamaEndpoint = '/api/settings/test-ollama';
+  static const String whisperOllamaModelsEndpoint = '/api/settings/ollama-models';
+
+  // Whisper AI Generation Types
+  static const List<String> whisperAIGenerationTypes = [
+    'brief_summary',
+    'detailed_summary',
+    'action_items',
+    'key_points',
+    'meeting_notes',
+    'sop',
+    'technical_doc',
+    'executive_summary',
+    'qa',
+    'sentiment',
+    'timeline',
+    'keywords',
+    'transcript_summary',
+    'custom',
+  ];
+
+  // Whisper AI Generation Type Display Names
+  static const Map<String, String> whisperAIGenerationTypeDisplayNames = {
+    'brief_summary': 'Brief Summary',
+    'detailed_summary': 'Detailed Summary',
+    'action_items': 'Action Items',
+    'key_points': 'Key Points',
+    'meeting_notes': 'Meeting Notes',
+    'sop': 'Standard Operating Procedure',
+    'technical_doc': 'Technical Documentation',
+    'executive_summary': 'Executive Summary',
+    'qa': 'Q&A Format',
+    'sentiment': 'Sentiment Analysis',
+    'timeline': 'Timeline',
+    'keywords': 'Keywords',
+    'transcript_summary': 'Transcript Summary',
+    'custom': 'Custom',
+  };
+
   // Entity Types
   static const List<String> entityTypes = [
     'PERSON',

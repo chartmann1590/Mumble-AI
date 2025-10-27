@@ -9,6 +9,7 @@ import 'services/api_service.dart';
 import 'services/audio_service.dart';
 import 'services/logging_service.dart';
 import 'services/session_service.dart';
+import 'services/whisper_service.dart';
 import 'screens/server_connect_screen.dart';
 import 'screens/user_selection_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -24,6 +25,8 @@ import 'screens/persona_screen.dart';
 import 'screens/advanced_settings_screen.dart';
 import 'screens/whisper_language_screen.dart';
 import 'screens/memory_system_screen.dart';
+import 'screens/transcriptions_screen.dart';
+import 'screens/transcription_detail_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,6 +55,7 @@ void main() async {
   final audioService = AudioService.getInstance();
   final loggingService = LoggingService.getInstance();
   final sessionService = await SessionService.getInstance();
+  final whisperService = WhisperService.getInstance();
   
   // Set ApiService reference for automatic log sending
   loggingService.setApiService(apiService);
@@ -68,6 +72,7 @@ void main() async {
     audioService: audioService,
     loggingService: loggingService,
     sessionService: sessionService,
+    whisperService: whisperService,
   ));
 }
 
@@ -77,6 +82,7 @@ class MyApp extends StatelessWidget {
   final AudioService audioService;
   final LoggingService loggingService;
   final SessionService sessionService;
+  final WhisperService whisperService;
 
   const MyApp({
     Key? key,
@@ -85,6 +91,7 @@ class MyApp extends StatelessWidget {
     required this.audioService,
     required this.loggingService,
     required this.sessionService,
+    required this.whisperService,
   }) : super(key: key);
 
   @override
@@ -96,6 +103,7 @@ class MyApp extends StatelessWidget {
         Provider<AudioService>.value(value: audioService),
         Provider<LoggingService>.value(value: loggingService),
         Provider<SessionService>.value(value: sessionService),
+        Provider<WhisperService>.value(value: whisperService),
       ],
       child: MaterialApp(
         title: AppConstants.appName,
@@ -117,6 +125,8 @@ class MyApp extends StatelessWidget {
                   '/advanced-settings': (context) => const AdvancedSettingsScreen(),
                   '/whisper-language': (context) => const WhisperLanguageScreen(),
                   '/memory-system': (context) => const MemorySystemScreen(),
+                  '/transcriptions': (context) => const TranscriptionsScreen(),
+                  '/transcription-detail': (context) => const TranscriptionDetailScreen(),
                 },
         debugShowCheckedModeBanner: false,
       ),

@@ -258,6 +258,12 @@ class AppDrawer extends StatelessWidget {
         'route': '/whisper-language',
         'color': AppTheme.primaryColor,
       },
+      {
+        'title': 'Transcriptions',
+        'icon': Icons.mic,
+        'route': '/transcriptions',
+        'color': Colors.purple,
+      },
     ];
 
     return ListView(
