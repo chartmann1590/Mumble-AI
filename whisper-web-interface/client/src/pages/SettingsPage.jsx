@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Save, RefreshCw, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
-import { getSettings, updateSettings, testOllamaConnection } from '../services/api';
+import { Settings, Save, RefreshCw, CheckCircle, AlertCircle, Loader2, ChevronDown } from 'lucide-react';
+import { getSettings, updateSettings, testOllamaConnection, getOllamaModels } from '../services/api';
 
 function SettingsPage() {
   const [settings, setSettings] = useState({
@@ -13,6 +13,9 @@ function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [saveMessage, setSaveMessage] = useState(null);
+  const [availableModels, setAvailableModels] = useState([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelFetchError, setModelFetchError] = useState(null);
 
   useEffect(() => {
     loadSettings();
@@ -79,6 +82,33 @@ function SettingsPage() {
     setSaveMessage(null);
   };
 
+  const handleFetchModels = async () => {
+    if (!settings.ollama_url) {
+      setModelFetchError('Please enter an Ollama URL first');
+      return;
+    }
+
+    try {
+      setFetchingModels(true);
+      setModelFetchError(null);
+      const result = await getOllamaModels(settings.ollama_url);
+
+      if (result.success && result.models) {
+        setAvailableModels(result.models);
+        if (result.models.length === 0) {
+          setModelFetchError('No models found on server');
+        }
+      } else {
+        setModelFetchError('Failed to fetch models from server');
+      }
+    } catch (error) {
+      console.error('Error fetching models:', error);
+      setModelFetchError(`Error: ${error.message || 'Failed to connect to Ollama server'}`);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -121,18 +151,66 @@ function SettingsPage() {
 
           {/* Ollama Model */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Ollama Model
-            </label>
-            <input
-              type="text"
-              value={settings.ollama_model}
-              onChange={(e) => handleChange('ollama_model', e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              placeholder="llama3.2:latest"
-            />
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Ollama Model
+              </label>
+              <button
+                onClick={handleFetchModels}
+                disabled={fetchingModels || !settings.ollama_url}
+                className="flex items-center gap-1 px-3 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              >
+                {fetchingModels ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Fetching...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3 h-3" />
+                    Fetch Models
+                  </>
+                )}
+              </button>
+            </div>
+
+            {availableModels.length > 0 ? (
+              <div className="relative">
+                <select
+                  value={settings.ollama_model}
+                  onChange={(e) => handleChange('ollama_model', e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent appearance-none bg-white"
+                >
+                  <option value="">Select a model...</option>
+                  {availableModels.map((model) => (
+                    <option key={model.name} value={model.name}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={settings.ollama_model}
+                onChange={(e) => handleChange('ollama_model', e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                placeholder="llama3.2:latest"
+              />
+            )}
+
+            {modelFetchError && (
+              <div className="mt-2 flex items-center text-sm text-red-600">
+                <AlertCircle className="w-4 h-4 mr-1" />
+                {modelFetchError}
+              </div>
+            )}
+
             <p className="mt-1 text-sm text-gray-500">
-              The Ollama model to use for AI generation (e.g., llama3.2:latest, qwen2.5:3b)
+              {availableModels.length > 0
+                ? 'Select a model from your Ollama server or type a custom model name'
+                : 'Click "Fetch Models" to load available models, or type a model name manually'}
             </p>
           </div>
 

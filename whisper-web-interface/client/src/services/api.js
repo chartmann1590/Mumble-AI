@@ -141,4 +141,11 @@ export const testOllamaConnection = async (url, model) => {
   return response.data;
 };
 
+export const getOllamaModels = async (url) => {
+  const response = await api.post('/settings/ollama-models', {
+    url,
+  });
+  return response.data;
+};
+
 export default api;

@@ -1151,28 +1151,62 @@ def export_transcript(transcription_id, format):
                 # Create Word document
                 doc = Document()
 
-                # Add title
-                title_para = doc.add_heading(display_title, 0)
-                title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                # Add logo/header with styling
+                header_para = doc.add_paragraph()
+                header_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                header_run = header_para.add_run("🎤 WHISPER AI TRANSCRIPTION")
+                header_run.font.size = Pt(16)
+                header_run.font.color.rgb = RGBColor(99, 102, 241)  # Indigo color
+                header_run.bold = True
 
-                # Add metadata
-                meta_para = doc.add_paragraph()
-                meta_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                if created_at:
-                    meta_para.add_run(f"Date: {created_at.strftime('%B %d, %Y')}\n")
-                if duration:
-                    minutes = int(duration // 60)
-                    seconds = int(duration % 60)
-                    meta_para.add_run(f"Duration: {minutes}m {seconds}s\n")
-                if language:
-                    meta_para.add_run(f"Language: {language}\n")
+                # Add separator line
+                sep_para = doc.add_paragraph("_" * 80)
+                sep_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                sep_run = sep_para.runs[0]
+                sep_run.font.color.rgb = RGBColor(209, 213, 219)  # Gray color
 
                 doc.add_paragraph()  # Spacer
 
-                # Add content
+                # Add title with enhanced styling
+                title_para = doc.add_heading(display_title, 0)
+                title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                title_run = title_para.runs[0]
+                title_run.font.color.rgb = RGBColor(31, 41, 55)  # Dark gray
+                title_run.font.size = Pt(24)
+
+                # Add metadata with enhanced styling
+                meta_para = doc.add_paragraph()
+                meta_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                meta_para.paragraph_format.space_after = Pt(20)
+
+                meta_parts = []
+                if created_at:
+                    meta_parts.append(f"📅 {created_at.strftime('%B %d, %Y')}")
+                if duration:
+                    minutes = int(duration // 60)
+                    seconds = int(duration % 60)
+                    meta_parts.append(f"⏱️ {minutes}m {seconds}s")
+                if language:
+                    meta_parts.append(f"🌐 {language.upper()}")
+
+                meta_text = "  |  ".join(meta_parts)
+                meta_run = meta_para.add_run(meta_text)
+                meta_run.font.size = Pt(11)
+                meta_run.font.color.rgb = RGBColor(107, 114, 128)  # Gray
+                meta_run.italic = True
+
+                doc.add_paragraph()  # Spacer
+
+                # Add content section header
+                content_header = doc.add_heading("Transcription", level=2)
+                content_header.runs[0].font.color.rgb = RGBColor(99, 102, 241)
+
+                # Add content with better formatting
                 for line in content.split('\n'):
                     if line.strip():
-                        doc.add_paragraph(line)
+                        para = doc.add_paragraph(line)
+                        para.paragraph_format.space_after = Pt(8)
+                        para.runs[0].font.size = Pt(11)
                     else:
                         doc.add_paragraph()  # Empty line
 
@@ -1189,55 +1223,106 @@ def export_transcript(transcription_id, format):
                 )
 
             elif format.lower() == 'pdf':
+                from xml.sax.saxutils import escape
+
                 # Create PDF document
                 file_stream = BytesIO()
-                doc = SimpleDocTemplate(file_stream, pagesize=letter)
+                doc = SimpleDocTemplate(file_stream, pagesize=letter,
+                                       topMargin=0.75*inch, bottomMargin=0.75*inch)
                 styles = getSampleStyleSheet()
 
                 # Custom styles
+                header_style = ParagraphStyle(
+                    'CustomHeader',
+                    parent=styles['Heading1'],
+                    fontSize=16,
+                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    spaceAfter=10,
+                    alignment=1,  # Center
+                    fontName='Helvetica-Bold'
+                )
+
                 title_style = ParagraphStyle(
                     'CustomTitle',
                     parent=styles['Heading1'],
                     fontSize=24,
-                    textColor=RGBColor(0, 0, 128),
+                    textColor=RGBColor(31/255, 41/255, 55/255),  # Dark gray
+                    spaceAfter=15,
+                    spaceBefore=10,
+                    alignment=1,  # Center
+                    fontName='Helvetica-Bold'
+                )
+
+                meta_style = ParagraphStyle(
+                    'CustomMeta',
+                    parent=styles['Normal'],
+                    fontSize=11,
+                    textColor=RGBColor(107/255, 114/255, 128/255),  # Gray
                     spaceAfter=30,
-                    alignment=1  # Center
+                    alignment=1,  # Center
+                    fontName='Helvetica-Oblique'
+                )
+
+                section_style = ParagraphStyle(
+                    'SectionHeader',
+                    parent=styles['Heading2'],
+                    fontSize=14,
+                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    spaceAfter=12,
+                    spaceBefore=15,
+                    fontName='Helvetica-Bold'
                 )
 
                 content_style = ParagraphStyle(
                     'CustomContent',
                     parent=styles['BodyText'],
                     fontSize=11,
-                    leading=14
+                    leading=16,
+                    spaceAfter=8,
+                    textColor=RGBColor(0, 0, 0)
                 )
 
                 # Build content
                 story = []
 
-                # Add title
-                story.append(Paragraph(display_title, title_style))
+                # Add logo/header
+                story.append(Paragraph("🎤 WHISPER AI TRANSCRIPTION", header_style))
+
+                # Add separator
+                from reportlab.platypus import Table
+                separator_data = [['_' * 100]]
+                separator_table = Table(separator_data, colWidths=[6.5*inch])
+                separator_table.setStyle([
+                    ('TEXTCOLOR', (0,0), (-1,-1), RGBColor(209/255, 213/255, 219/255)),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ])
+                story.append(separator_table)
                 story.append(Spacer(1, 0.2*inch))
 
+                # Add title
+                story.append(Paragraph(escape(display_title), title_style))
+
                 # Add metadata
-                meta_text = []
+                meta_parts = []
                 if created_at:
-                    meta_text.append(f"Date: {created_at.strftime('%B %d, %Y')}")
+                    meta_parts.append(f"📅 {created_at.strftime('%B %d, %Y')}")
                 if duration:
                     minutes = int(duration // 60)
                     seconds = int(duration % 60)
-                    meta_text.append(f"Duration: {minutes}m {seconds}s")
+                    meta_parts.append(f"⏱️ {minutes}m {seconds}s")
                 if language:
-                    meta_text.append(f"Language: {language}")
+                    meta_parts.append(f"🌐 {language.upper()}")
 
-                if meta_text:
-                    story.append(Paragraph("<br/>".join(meta_text), styles['Normal']))
-                    story.append(Spacer(1, 0.3*inch))
+                meta_text = "  |  ".join(meta_parts)
+                story.append(Paragraph(escape(meta_text), meta_style))
+
+                # Add section header
+                story.append(Paragraph("Transcription", section_style))
 
                 # Add content
                 for line in content.split('\n'):
                     if line.strip():
-                        # Escape special characters for PDF
-                        safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        safe_line = escape(line)
                         story.append(Paragraph(safe_line, content_style))
                     else:
                         story.append(Spacer(1, 0.1*inch))
@@ -1320,41 +1405,110 @@ def export_ai_content(transcription_id, generation_type, format):
                 # Create Word document
                 doc = Document()
 
-                # Add title
-                title_para = doc.add_heading(f"{gen_type_display}: {display_title}", 0)
-                title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                # Add logo/header with styling
+                header_para = doc.add_paragraph()
+                header_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                header_run = header_para.add_run("🤖 WHISPER AI GENERATION")
+                header_run.font.size = Pt(16)
+                header_run.font.color.rgb = RGBColor(99, 102, 241)  # Indigo color
+                header_run.bold = True
 
-                # Add metadata
-                meta_para = doc.add_paragraph()
-                meta_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                if created_at:
-                    meta_para.add_run(f"Generated: {created_at.strftime('%B %d, %Y at %I:%M %p')}\n")
-                if model:
-                    meta_para.add_run(f"AI Model: {model}\n")
-                meta_para.add_run(f"Type: {gen_type_display}")
+                # Add separator line
+                sep_para = doc.add_paragraph("_" * 80)
+                sep_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                sep_run = sep_para.runs[0]
+                sep_run.font.color.rgb = RGBColor(209, 213, 219)  # Gray color
 
                 doc.add_paragraph()  # Spacer
 
-                # Convert markdown to plain text with some formatting
+                # Add generation type badge
+                badge_para = doc.add_paragraph()
+                badge_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                badge_run = badge_para.add_run(f"  {gen_type_display}  ")
+                badge_run.font.size = Pt(10)
+                badge_run.font.color.rgb = RGBColor(255, 255, 255)  # White text
+                badge_run.bold = True
+                # Background color simulation with highlighting
+                badge_para.paragraph_format.space_after = Pt(15)
+
+                # Add title with enhanced styling
+                title_para = doc.add_heading(display_title, 0)
+                title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                title_run = title_para.runs[0]
+                title_run.font.color.rgb = RGBColor(31, 41, 55)  # Dark gray
+                title_run.font.size = Pt(22)
+
+                # Add metadata with enhanced styling
+                meta_para = doc.add_paragraph()
+                meta_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                meta_para.paragraph_format.space_after = Pt(20)
+
+                meta_parts = []
+                if created_at:
+                    meta_parts.append(f"📅 {created_at.strftime('%B %d, %Y at %I:%M %p')}")
+                if model:
+                    meta_parts.append(f"🧠 {model}")
+                meta_parts.append(f"📝 {gen_type_display}")
+
+                meta_text = "  |  ".join(meta_parts)
+                meta_run = meta_para.add_run(meta_text)
+                meta_run.font.size = Pt(10)
+                meta_run.font.color.rgb = RGBColor(107, 114, 128)  # Gray
+                meta_run.italic = True
+
+                doc.add_paragraph()  # Spacer
+
+                # Add content section header
+                content_header = doc.add_heading("Generated Content", level=2)
+                content_header.runs[0].font.color.rgb = RGBColor(99, 102, 241)
+
+                # Convert markdown to plain text with enhanced formatting
+                import re
                 lines = content.split('\n')
                 for line in lines:
                     if line.strip():
                         # Check for headers
                         if line.startswith('###'):
-                            doc.add_heading(line.replace('###', '').strip(), 3)
+                            heading = doc.add_heading(line.replace('###', '').strip(), 3)
+                            heading.runs[0].font.color.rgb = RGBColor(79, 70, 229)
                         elif line.startswith('##'):
-                            doc.add_heading(line.replace('##', '').strip(), 2)
+                            heading = doc.add_heading(line.replace('##', '').strip(), 2)
+                            heading.runs[0].font.color.rgb = RGBColor(79, 70, 229)
                         elif line.startswith('#'):
-                            doc.add_heading(line.replace('#', '').strip(), 1)
+                            heading = doc.add_heading(line.replace('#', '').strip(), 1)
+                            heading.runs[0].font.color.rgb = RGBColor(79, 70, 229)
                         # Check for bullet points
                         elif line.strip().startswith('- ') or line.strip().startswith('* '):
                             para = doc.add_paragraph(line.strip()[2:], style='List Bullet')
+                            para.paragraph_format.space_after = Pt(6)
+                            para.runs[0].font.size = Pt(11)
                         # Check for numbered lists
-                        elif line.strip()[0].isdigit() and '. ' in line:
+                        elif len(line.strip()) > 0 and line.strip()[0].isdigit() and '. ' in line:
                             text = line.split('. ', 1)[1] if '. ' in line else line
                             para = doc.add_paragraph(text, style='List Number')
+                            para.paragraph_format.space_after = Pt(6)
+                            para.runs[0].font.size = Pt(11)
                         else:
-                            doc.add_paragraph(line)
+                            # Handle bold and italic markdown
+                            para = doc.add_paragraph()
+                            para.paragraph_format.space_after = Pt(8)
+
+                            # Simple bold/italic parsing (basic implementation)
+                            text = line
+                            # Handle **bold** and *italic* - simplified
+                            parts = re.split(r'(\*\*[^*]+\*\*|\*[^*]+\*)', text)
+                            for part in parts:
+                                if part.startswith('**') and part.endswith('**'):
+                                    run = para.add_run(part[2:-2])
+                                    run.bold = True
+                                    run.font.size = Pt(11)
+                                elif part.startswith('*') and part.endswith('*'):
+                                    run = para.add_run(part[1:-1])
+                                    run.italic = True
+                                    run.font.size = Pt(11)
+                                else:
+                                    run = para.add_run(part)
+                                    run.font.size = Pt(11)
                     else:
                         doc.add_paragraph()  # Empty line
 
@@ -1373,52 +1527,158 @@ def export_ai_content(transcription_id, generation_type, format):
                 )
 
             elif format.lower() == 'pdf':
+                from xml.sax.saxutils import escape
+                import re
+
                 # Create PDF document
                 file_stream = BytesIO()
-                doc = SimpleDocTemplate(file_stream, pagesize=letter)
+                doc = SimpleDocTemplate(file_stream, pagesize=letter,
+                                       topMargin=0.75*inch, bottomMargin=0.75*inch)
                 styles = getSampleStyleSheet()
 
                 # Custom styles
+                header_style = ParagraphStyle(
+                    'CustomHeader',
+                    parent=styles['Heading1'],
+                    fontSize=16,
+                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    spaceAfter=10,
+                    alignment=1,  # Center
+                    fontName='Helvetica-Bold'
+                )
+
+                badge_style = ParagraphStyle(
+                    'Badge',
+                    parent=styles['Normal'],
+                    fontSize=10,
+                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    spaceAfter=10,
+                    alignment=1,  # Center
+                    fontName='Helvetica-Bold'
+                )
+
                 title_style = ParagraphStyle(
                     'CustomTitle',
                     parent=styles['Heading1'],
-                    fontSize=20,
-                    textColor=RGBColor(0, 0, 128),
-                    spaceAfter=20,
-                    alignment=1  # Center
+                    fontSize=22,
+                    textColor=RGBColor(31/255, 41/255, 55/255),  # Dark gray
+                    spaceAfter=15,
+                    spaceBefore=5,
+                    alignment=1,  # Center
+                    fontName='Helvetica-Bold'
+                )
+
+                meta_style = ParagraphStyle(
+                    'CustomMeta',
+                    parent=styles['Normal'],
+                    fontSize=10,
+                    textColor=RGBColor(107/255, 114/255, 128/255),  # Gray
+                    spaceAfter=30,
+                    alignment=1,  # Center
+                    fontName='Helvetica-Oblique'
+                )
+
+                section_style = ParagraphStyle(
+                    'SectionHeader',
+                    parent=styles['Heading2'],
+                    fontSize=14,
+                    textColor=RGBColor(99/255, 102/255, 241/255),  # Indigo
+                    spaceAfter=12,
+                    spaceBefore=15,
+                    fontName='Helvetica-Bold'
+                )
+
+                heading2_style = ParagraphStyle(
+                    'CustomHeading2',
+                    parent=styles['Heading2'],
+                    fontSize=14,
+                    textColor=RGBColor(79/255, 70/255, 229/255),  # Indigo variant
+                    spaceAfter=8,
+                    spaceBefore=12,
+                    fontName='Helvetica-Bold'
+                )
+
+                heading3_style = ParagraphStyle(
+                    'CustomHeading3',
+                    parent=styles['Heading3'],
+                    fontSize=12,
+                    textColor=RGBColor(79/255, 70/255, 229/255),  # Indigo variant
+                    spaceAfter=6,
+                    spaceBefore=10,
+                    fontName='Helvetica-Bold'
+                )
+
+                content_style = ParagraphStyle(
+                    'CustomContent',
+                    parent=styles['BodyText'],
+                    fontSize=11,
+                    leading=16,
+                    spaceAfter=8,
+                    textColor=RGBColor(0, 0, 0)
                 )
 
                 # Build content
                 story = []
 
+                # Add logo/header
+                story.append(Paragraph("🤖 WHISPER AI GENERATION", header_style))
+
+                # Add separator
+                from reportlab.platypus import Table
+                separator_data = [['_' * 100]]
+                separator_table = Table(separator_data, colWidths=[6.5*inch])
+                separator_table.setStyle([
+                    ('TEXTCOLOR', (0,0), (-1,-1), RGBColor(209/255, 213/255, 219/255)),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ])
+                story.append(separator_table)
+                story.append(Spacer(1, 0.15*inch))
+
+                # Add generation type badge
+                story.append(Paragraph(f"[ {gen_type_display} ]", badge_style))
+
                 # Add title
-                story.append(Paragraph(f"{gen_type_display}: {display_title}", title_style))
-                story.append(Spacer(1, 0.2*inch))
+                story.append(Paragraph(escape(display_title), title_style))
 
                 # Add metadata
-                meta_text = []
+                meta_parts = []
                 if created_at:
-                    meta_text.append(f"Generated: {created_at.strftime('%B %d, %Y at %I:%M %p')}")
+                    meta_parts.append(f"📅 {created_at.strftime('%B %d, %Y at %I:%M %p')}")
                 if model:
-                    meta_text.append(f"AI Model: {model}")
-                meta_text.append(f"Type: {gen_type_display}")
+                    meta_parts.append(f"🧠 {model}")
+                meta_parts.append(f"📝 {gen_type_display}")
 
-                story.append(Paragraph("<br/>".join(meta_text), styles['Normal']))
-                story.append(Spacer(1, 0.3*inch))
+                meta_text = "  |  ".join(meta_parts)
+                story.append(Paragraph(escape(meta_text), meta_style))
 
-                # Add content (simple markdown conversion)
+                # Add section header
+                story.append(Paragraph("Generated Content", section_style))
+
+                # Add content with enhanced markdown conversion
                 for line in content.split('\n'):
                     if line.strip():
-                        safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                         # Handle headers
                         if line.startswith('###'):
-                            story.append(Paragraph(line.replace('###', '').strip(), styles['Heading3']))
+                            story.append(Paragraph(escape(line.replace('###', '').strip()), heading3_style))
                         elif line.startswith('##'):
-                            story.append(Paragraph(line.replace('##', '').strip(), styles['Heading2']))
+                            story.append(Paragraph(escape(line.replace('##', '').strip()), heading2_style))
                         elif line.startswith('#'):
-                            story.append(Paragraph(line.replace('#', '').strip(), styles['Heading1']))
+                            story.append(Paragraph(escape(line.replace('#', '').strip()), heading2_style))
+                        # Handle bullet points
+                        elif line.strip().startswith('- ') or line.strip().startswith('* '):
+                            bullet_text = escape(line.strip()[2:])
+                            story.append(Paragraph(f"• {bullet_text}", content_style))
+                        # Handle numbered lists
+                        elif len(line.strip()) > 0 and line.strip()[0].isdigit() and '. ' in line:
+                            story.append(Paragraph(escape(line), content_style))
                         else:
-                            story.append(Paragraph(safe_line, styles['BodyText']))
+                            # Handle bold and italic markdown in PDF
+                            safe_line = escape(line)
+                            # Convert **bold** to <b>bold</b>
+                            safe_line = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', safe_line)
+                            # Convert *italic* to <i>italic</i>
+                            safe_line = re.sub(r'\*([^*]+)\*', r'<i>\1</i>', safe_line)
+                            story.append(Paragraph(safe_line, content_style))
                     else:
                         story.append(Spacer(1, 0.1*inch))
 
@@ -2159,6 +2419,55 @@ def update_settings():
 
     except Exception as e:
         logger.error(f"Update settings error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings/ollama-models', methods=['POST'])
+def get_ollama_models():
+    """Fetch available models from Ollama server"""
+    try:
+        data = request.get_json()
+        ollama_url = data.get('url')
+
+        if not ollama_url:
+            return jsonify({'error': 'Missing url'}), 400
+
+        try:
+            response = requests.get(f"{ollama_url}/api/tags", timeout=5)
+            if response.status_code == 200:
+                models = response.json().get('models', [])
+                model_list = []
+
+                for model in models:
+                    model_list.append({
+                        'name': model['name'],
+                        'size': model.get('size', 0),
+                        'modified': model.get('modified_at', '')
+                    })
+
+                return jsonify({
+                    'success': True,
+                    'models': model_list
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f'Server responded with status {response.status_code}'
+                }), 200
+
+        except requests.exceptions.Timeout:
+            return jsonify({
+                'success': False,
+                'error': 'Connection timeout - server not responding'
+            }), 200
+
+        except requests.exceptions.ConnectionError:
+            return jsonify({
+                'success': False,
+                'error': 'Connection failed - cannot reach server'
+            }), 200
+
+    except Exception as e:
+        logger.error(f"Get Ollama models error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/settings/test-ollama', methods=['POST'])
