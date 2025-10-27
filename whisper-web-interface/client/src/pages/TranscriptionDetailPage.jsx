@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock, Globe, Users, Trash2, FileText, Sparkles } from 'lucide-react';
+import { ArrowLeft, Clock, Globe, Users, Trash2, FileText, Sparkles, Download } from 'lucide-react';
 import { getTranscription, deleteTranscription, regenerateTitle } from '../services/api';
 import { formatFileSize, formatDuration, formatDate, formatLanguage, getSpeakerCount } from '../utils/formatters';
 import SummaryPanel from '../components/SummaryPanel';
@@ -88,6 +88,11 @@ function TranscriptionDetailPage() {
     } finally {
       setRegeneratingTitle(false);
     }
+  };
+
+  const handleExportTranscript = (format) => {
+    const url = `/api/export-transcript/${id}/${format}`;
+    window.open(url, '_blank');
   };
 
   if (loading) {
@@ -190,30 +195,50 @@ function TranscriptionDetailPage() {
           <div className="bg-white rounded-lg shadow-md p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold text-gray-900">Transcription</h2>
-              {currentSegments && currentSegments.length > 0 && (
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => setViewMode('formatted')}
-                    className={`px-3 py-1 text-sm rounded transition-colors ${
-                      viewMode === 'formatted'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    Formatted
-                  </button>
-                  <button
-                    onClick={() => setViewMode('timeline')}
-                    className={`px-3 py-1 text-sm rounded transition-colors ${
-                      viewMode === 'timeline'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    Timeline
-                  </button>
-                </div>
-              )}
+              <div className="flex space-x-2">
+                {/* Export Buttons */}
+                <button
+                  onClick={() => handleExportTranscript('docx')}
+                  className="flex items-center gap-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                  title="Export to Word"
+                >
+                  <Download className="w-4 h-4" />
+                  Word
+                </button>
+                <button
+                  onClick={() => handleExportTranscript('pdf')}
+                  className="flex items-center gap-1 px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                  title="Export to PDF"
+                >
+                  <Download className="w-4 h-4" />
+                  PDF
+                </button>
+                {/* View Mode Buttons */}
+                {currentSegments && currentSegments.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => setViewMode('formatted')}
+                      className={`px-3 py-1 text-sm rounded transition-colors ${
+                        viewMode === 'formatted'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Formatted
+                    </button>
+                    <button
+                      onClick={() => setViewMode('timeline')}
+                      className={`px-3 py-1 text-sm rounded transition-colors ${
+                        viewMode === 'timeline'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Timeline
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             {currentSegments && currentSegments.length > 0 ? (

@@ -1103,6 +1103,341 @@ def get_ai_content(transcription_id):
         logger.error(f"Error fetching AI content: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/export-transcript/<int:transcription_id>/<format>', methods=['GET'])
+def export_transcript(transcription_id, format):
+    """Export transcription to Word or PDF format"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from io import BytesIO
+        import markdown
+
+        # Get transcription from database
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT filename, title, transcription_text, transcription_formatted,
+                       duration_seconds, language, created_at
+                FROM transcriptions
+                WHERE id = %s
+            """, (transcription_id,))
+
+            row = cursor.fetchone()
+            cursor.close()
+
+            if not row:
+                return jsonify({'error': 'Transcription not found'}), 404
+
+            filename, title, text, formatted_text, duration, language, created_at = row
+            display_title = title or filename
+            content = formatted_text or text
+
+            if format.lower() == 'docx':
+                # Create Word document
+                doc = Document()
+
+                # Add title
+                title_para = doc.add_heading(display_title, 0)
+                title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+                # Add metadata
+                meta_para = doc.add_paragraph()
+                meta_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                if created_at:
+                    meta_para.add_run(f"Date: {created_at.strftime('%B %d, %Y')}\n")
+                if duration:
+                    minutes = int(duration // 60)
+                    seconds = int(duration % 60)
+                    meta_para.add_run(f"Duration: {minutes}m {seconds}s\n")
+                if language:
+                    meta_para.add_run(f"Language: {language}\n")
+
+                doc.add_paragraph()  # Spacer
+
+                # Add content
+                for line in content.split('\n'):
+                    if line.strip():
+                        doc.add_paragraph(line)
+                    else:
+                        doc.add_paragraph()  # Empty line
+
+                # Save to BytesIO
+                file_stream = BytesIO()
+                doc.save(file_stream)
+                file_stream.seek(0)
+
+                return send_file(
+                    file_stream,
+                    mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    as_attachment=True,
+                    download_name=f"{display_title.replace(' ', '_')}.docx"
+                )
+
+            elif format.lower() == 'pdf':
+                # Create PDF document
+                file_stream = BytesIO()
+                doc = SimpleDocTemplate(file_stream, pagesize=letter)
+                styles = getSampleStyleSheet()
+
+                # Custom styles
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=24,
+                    textColor=RGBColor(0, 0, 128),
+                    spaceAfter=30,
+                    alignment=1  # Center
+                )
+
+                content_style = ParagraphStyle(
+                    'CustomContent',
+                    parent=styles['BodyText'],
+                    fontSize=11,
+                    leading=14
+                )
+
+                # Build content
+                story = []
+
+                # Add title
+                story.append(Paragraph(display_title, title_style))
+                story.append(Spacer(1, 0.2*inch))
+
+                # Add metadata
+                meta_text = []
+                if created_at:
+                    meta_text.append(f"Date: {created_at.strftime('%B %d, %Y')}")
+                if duration:
+                    minutes = int(duration // 60)
+                    seconds = int(duration % 60)
+                    meta_text.append(f"Duration: {minutes}m {seconds}s")
+                if language:
+                    meta_text.append(f"Language: {language}")
+
+                if meta_text:
+                    story.append(Paragraph("<br/>".join(meta_text), styles['Normal']))
+                    story.append(Spacer(1, 0.3*inch))
+
+                # Add content
+                for line in content.split('\n'):
+                    if line.strip():
+                        # Escape special characters for PDF
+                        safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        story.append(Paragraph(safe_line, content_style))
+                    else:
+                        story.append(Spacer(1, 0.1*inch))
+
+                doc.build(story)
+                file_stream.seek(0)
+
+                return send_file(
+                    file_stream,
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=f"{display_title.replace(' ', '_')}.pdf"
+                )
+
+            else:
+                return jsonify({'error': 'Invalid format. Use docx or pdf'}), 400
+
+        finally:
+            return_db_connection(conn)
+
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/export-ai-content/<int:transcription_id>/<generation_type>/<format>', methods=['GET'])
+def export_ai_content(transcription_id, generation_type, format):
+    """Export AI-generated content to Word or PDF format"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from io import BytesIO
+        import markdown as md_lib
+
+        # Get AI content from database
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        try:
+            cursor = conn.cursor()
+
+            # Get transcription info
+            cursor.execute("""
+                SELECT filename, title
+                FROM transcriptions
+                WHERE id = %s
+            """, (transcription_id,))
+
+            trans_row = cursor.fetchone()
+            if not trans_row:
+                return jsonify({'error': 'Transcription not found'}), 404
+
+            filename, title = trans_row
+            display_title = title or filename
+
+            # Get AI content
+            cursor.execute("""
+                SELECT content, model, created_at
+                FROM ai_generated_content
+                WHERE transcription_id = %s AND generation_type = %s
+            """, (transcription_id, generation_type))
+
+            ai_row = cursor.fetchone()
+            cursor.close()
+
+            if not ai_row:
+                return jsonify({'error': 'AI content not found'}), 404
+
+            content, model, created_at = ai_row
+
+            # Format generation type for display
+            gen_type_display = generation_type.replace('_', ' ').title()
+
+            if format.lower() == 'docx':
+                # Create Word document
+                doc = Document()
+
+                # Add title
+                title_para = doc.add_heading(f"{gen_type_display}: {display_title}", 0)
+                title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+                # Add metadata
+                meta_para = doc.add_paragraph()
+                meta_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                if created_at:
+                    meta_para.add_run(f"Generated: {created_at.strftime('%B %d, %Y at %I:%M %p')}\n")
+                if model:
+                    meta_para.add_run(f"AI Model: {model}\n")
+                meta_para.add_run(f"Type: {gen_type_display}")
+
+                doc.add_paragraph()  # Spacer
+
+                # Convert markdown to plain text with some formatting
+                lines = content.split('\n')
+                for line in lines:
+                    if line.strip():
+                        # Check for headers
+                        if line.startswith('###'):
+                            doc.add_heading(line.replace('###', '').strip(), 3)
+                        elif line.startswith('##'):
+                            doc.add_heading(line.replace('##', '').strip(), 2)
+                        elif line.startswith('#'):
+                            doc.add_heading(line.replace('#', '').strip(), 1)
+                        # Check for bullet points
+                        elif line.strip().startswith('- ') or line.strip().startswith('* '):
+                            para = doc.add_paragraph(line.strip()[2:], style='List Bullet')
+                        # Check for numbered lists
+                        elif line.strip()[0].isdigit() and '. ' in line:
+                            text = line.split('. ', 1)[1] if '. ' in line else line
+                            para = doc.add_paragraph(text, style='List Number')
+                        else:
+                            doc.add_paragraph(line)
+                    else:
+                        doc.add_paragraph()  # Empty line
+
+                # Save to BytesIO
+                file_stream = BytesIO()
+                doc.save(file_stream)
+                file_stream.seek(0)
+
+                download_filename = f"{display_title.replace(' ', '_')}_{generation_type}.docx"
+
+                return send_file(
+                    file_stream,
+                    mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    as_attachment=True,
+                    download_name=download_filename
+                )
+
+            elif format.lower() == 'pdf':
+                # Create PDF document
+                file_stream = BytesIO()
+                doc = SimpleDocTemplate(file_stream, pagesize=letter)
+                styles = getSampleStyleSheet()
+
+                # Custom styles
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=20,
+                    textColor=RGBColor(0, 0, 128),
+                    spaceAfter=20,
+                    alignment=1  # Center
+                )
+
+                # Build content
+                story = []
+
+                # Add title
+                story.append(Paragraph(f"{gen_type_display}: {display_title}", title_style))
+                story.append(Spacer(1, 0.2*inch))
+
+                # Add metadata
+                meta_text = []
+                if created_at:
+                    meta_text.append(f"Generated: {created_at.strftime('%B %d, %Y at %I:%M %p')}")
+                if model:
+                    meta_text.append(f"AI Model: {model}")
+                meta_text.append(f"Type: {gen_type_display}")
+
+                story.append(Paragraph("<br/>".join(meta_text), styles['Normal']))
+                story.append(Spacer(1, 0.3*inch))
+
+                # Add content (simple markdown conversion)
+                for line in content.split('\n'):
+                    if line.strip():
+                        safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        # Handle headers
+                        if line.startswith('###'):
+                            story.append(Paragraph(line.replace('###', '').strip(), styles['Heading3']))
+                        elif line.startswith('##'):
+                            story.append(Paragraph(line.replace('##', '').strip(), styles['Heading2']))
+                        elif line.startswith('#'):
+                            story.append(Paragraph(line.replace('#', '').strip(), styles['Heading1']))
+                        else:
+                            story.append(Paragraph(safe_line, styles['BodyText']))
+                    else:
+                        story.append(Spacer(1, 0.1*inch))
+
+                doc.build(story)
+                file_stream.seek(0)
+
+                download_filename = f"{display_title.replace(' ', '_')}_{generation_type}.pdf"
+
+                return send_file(
+                    file_stream,
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=download_filename
+                )
+
+            else:
+                return jsonify({'error': 'Invalid format. Use docx or pdf'}), 400
+
+        finally:
+            return_db_connection(conn)
+
+    except Exception as e:
+        logger.error(f"Export AI content error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 def generate_title(transcription_text):
     """Generate a concise title for transcription using Ollama"""
     try:

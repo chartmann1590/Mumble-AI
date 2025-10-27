@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Sparkles, FileText, List, Target, CheckSquare, ListOrdered, FileCheck, MessageSquare, Loader2, TrendingUp, FileSearch, Calendar, Scale, FileSignature } from 'lucide-react';
+import { Sparkles, FileText, List, Target, CheckSquare, ListOrdered, FileCheck, MessageSquare, Loader2, TrendingUp, FileSearch, Calendar, Scale, FileSignature, Download } from 'lucide-react';
 import { generateAIContent, getAIContent } from '../services/api';
 
 const AIGenerationPanel = ({ transcriptionText, transcriptionId }) => {
@@ -168,6 +168,11 @@ const AIGenerationPanel = ({ transcriptionText, transcriptionId }) => {
     }
   };
 
+  const handleExportAIContent = (type, format) => {
+    const url = `/api/export-ai-content/${transcriptionId}/${type}/${format}`;
+    window.open(url, '_blank');
+  };
+
   const getColorClasses = (color) => {
     const colors = {
       blue: 'bg-blue-600 hover:bg-blue-700 text-white',
@@ -284,7 +289,7 @@ const AIGenerationPanel = ({ transcriptionText, transcriptionId }) => {
                         {data.content}
                       </ReactMarkdown>
                     </div>
-                    <div className="mt-4 flex gap-2">
+                    <div className="mt-4 flex flex-wrap gap-2">
                       <button
                         onClick={() => navigator.clipboard.writeText(data.content)}
                         className="text-sm text-blue-600 hover:text-blue-700 underline"
@@ -297,6 +302,20 @@ const AIGenerationPanel = ({ transcriptionText, transcriptionId }) => {
                         className="text-sm text-purple-600 hover:text-purple-700 underline disabled:opacity-50"
                       >
                         Regenerate
+                      </button>
+                      <button
+                        onClick={() => handleExportAIContent(type, 'docx')}
+                        className="flex items-center gap-1 text-sm text-green-600 hover:text-green-700 underline"
+                      >
+                        <Download className="w-3 h-3" />
+                        Export Word
+                      </button>
+                      <button
+                        onClick={() => handleExportAIContent(type, 'pdf')}
+                        className="flex items-center gap-1 text-sm text-red-600 hover:text-red-700 underline"
+                      >
+                        <Download className="w-3 h-3" />
+                        Export PDF
                       </button>
                     </div>
                   </div>
