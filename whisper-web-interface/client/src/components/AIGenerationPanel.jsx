@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
-import { Sparkles, FileText, List, Target, CheckSquare, ListOrdered, FileCheck, MessageSquare, Loader2 } from 'lucide-react';
-import { generateAIContent } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Sparkles, FileText, List, Target, CheckSquare, ListOrdered, FileCheck, MessageSquare, Loader2, TrendingUp, FileSearch, Calendar, Scale, FileSignature } from 'lucide-react';
+import { generateAIContent, getAIContent } from '../services/api';
 
-const AIGenerationPanel = ({ transcriptionText }) => {
+const AIGenerationPanel = ({ transcriptionText, transcriptionId }) => {
   const [generating, setGenerating] = useState(false);
   const [currentType, setCurrentType] = useState(null);
   const [generatedContent, setGeneratedContent] = useState({});
   const [expandedType, setExpandedType] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const generationOptions = [
     {
@@ -64,8 +67,73 @@ const AIGenerationPanel = ({ transcriptionText }) => {
       description: 'Questions and answers extracted',
       icon: MessageSquare,
       color: 'cyan'
+    },
+    {
+      type: 'executive_summary',
+      label: 'Executive Summary',
+      description: 'High-level overview for leadership',
+      icon: TrendingUp,
+      color: 'red'
+    },
+    {
+      type: 'sop',
+      label: 'SOP Document',
+      description: 'Standard Operating Procedure',
+      icon: FileSignature,
+      color: 'amber'
+    },
+    {
+      type: 'timeline',
+      label: 'Timeline',
+      description: 'Chronological event timeline',
+      icon: Calendar,
+      color: 'lime'
+    },
+    {
+      type: 'topics_tags',
+      label: 'Topics & Tags',
+      description: 'Main topics and themes extracted',
+      icon: FileSearch,
+      color: 'emerald'
+    },
+    {
+      type: 'pros_cons',
+      label: 'Pros & Cons',
+      description: 'Pros and cons analysis',
+      icon: Scale,
+      color: 'violet'
+    },
+    {
+      type: 'decisions_log',
+      label: 'Decisions Log',
+      description: 'All decisions documented',
+      icon: FileCheck,
+      color: 'fuchsia'
     }
   ];
+
+  // Load saved content on mount
+  useEffect(() => {
+    const loadSavedContent = async () => {
+      if (!transcriptionId) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const result = await getAIContent(transcriptionId);
+        if (result.success && result.content) {
+          setGeneratedContent(result.content);
+        }
+      } catch (error) {
+        console.error('Error loading saved AI content:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadSavedContent();
+  }, [transcriptionId]);
 
   const handleGenerate = async (type) => {
     if (!transcriptionText) {
@@ -81,7 +149,7 @@ const AIGenerationPanel = ({ transcriptionText }) => {
     setCurrentType(type);
 
     try {
-      const result = await generateAIContent(transcriptionText, type);
+      const result = await generateAIContent(transcriptionText, type, transcriptionId);
       setGeneratedContent(prev => ({
         ...prev,
         [type]: {
@@ -109,10 +177,27 @@ const AIGenerationPanel = ({ transcriptionText }) => {
       orange: 'bg-orange-600 hover:bg-orange-700 text-white',
       teal: 'bg-teal-600 hover:bg-teal-700 text-white',
       pink: 'bg-pink-600 hover:bg-pink-700 text-white',
-      cyan: 'bg-cyan-600 hover:bg-cyan-700 text-white'
+      cyan: 'bg-cyan-600 hover:bg-cyan-700 text-white',
+      red: 'bg-red-600 hover:bg-red-700 text-white',
+      amber: 'bg-amber-600 hover:bg-amber-700 text-white',
+      lime: 'bg-lime-600 hover:bg-lime-700 text-white',
+      emerald: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+      violet: 'bg-violet-600 hover:bg-violet-700 text-white',
+      fuchsia: 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white'
     };
     return colors[color] || colors.blue;
   };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="flex items-center justify-center">
+          <Loader2 className="w-6 h-6 animate-spin text-purple-600 mr-3" />
+          <span>Loading AI content...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
@@ -120,11 +205,11 @@ const AIGenerationPanel = ({ transcriptionText }) => {
         <Sparkles className="w-6 h-6 text-purple-600 mr-3" />
         <div>
           <h2 className="text-xl font-semibold text-gray-900">AI Generation Options</h2>
-          <p className="text-sm text-gray-500">Generate various AI-powered content from your transcription</p>
+          <p className="text-sm text-gray-500">Generate various AI-powered content from your transcription (saved automatically)</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
         {generationOptions.map((option) => {
           const Icon = option.icon;
           const isGenerating = generating && currentType === option.type;
@@ -135,23 +220,23 @@ const AIGenerationPanel = ({ transcriptionText }) => {
               <button
                 onClick={() => handleGenerate(option.type)}
                 disabled={generating}
-                className={`w-full p-4 rounded-lg transition-all duration-200 ${
+                className={`w-full p-3 rounded-lg transition-all duration-200 ${
                   getColorClasses(option.color)
                 } disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-start text-left ${
                   hasContent ? 'ring-2 ring-offset-2 ring-green-500' : ''
                 }`}
               >
                 <div className="flex items-center justify-between w-full mb-2">
-                  <Icon className={`w-5 h-5 ${isGenerating ? 'animate-spin' : ''}`} />
+                  <Icon className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
                   {hasContent && !isGenerating && (
-                    <CheckSquare className="w-4 h-4" />
+                    <CheckSquare className="w-3 h-3" />
                   )}
                   {isGenerating && (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-3 h-3 animate-spin" />
                   )}
                 </div>
-                <div className="font-semibold text-sm mb-1">{option.label}</div>
-                <div className="text-xs opacity-90">{option.description}</div>
+                <div className="font-semibold text-xs mb-1">{option.label}</div>
+                <div className="text-[10px] opacity-90">{option.description}</div>
               </button>
             </div>
           );
@@ -195,9 +280,9 @@ const AIGenerationPanel = ({ transcriptionText }) => {
                 {isExpanded && (
                   <div className="p-4 bg-white">
                     <div className="prose prose-sm max-w-none">
-                      <div className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {data.content}
-                      </div>
+                      </ReactMarkdown>
                     </div>
                     <div className="mt-4 flex gap-2">
                       <button

@@ -553,3 +553,40 @@ BEGIN
     RETURN sum_arr;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Create ai_generated_content table for storing AI-generated content from transcriptions
+CREATE TABLE IF NOT EXISTS ai_generated_content (
+    id SERIAL PRIMARY KEY,
+    transcription_id INTEGER NOT NULL REFERENCES transcriptions(id) ON DELETE CASCADE,
+    generation_type VARCHAR(100) NOT NULL,
+    content TEXT NOT NULL,
+    model VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(transcription_id, generation_type)
+);
+
+-- Create indexes for ai_generated_content
+CREATE INDEX IF NOT EXISTS idx_ai_content_transcription ON ai_generated_content(transcription_id);
+CREATE INDEX IF NOT EXISTS idx_ai_content_type ON ai_generated_content(generation_type);
+CREATE INDEX IF NOT EXISTS idx_ai_content_created ON ai_generated_content(created_at DESC);
+
+-- Add comments for ai_generated_content table
+COMMENT ON TABLE ai_generated_content IS 'Stores AI-generated content (summaries, outlines, action items, etc.) for transcriptions';
+COMMENT ON COLUMN ai_generated_content.generation_type IS 'Type of AI-generated content (e.g., brief_summary, action_items, sop)';
+COMMENT ON COLUMN ai_generated_content.content IS 'The AI-generated content text (typically markdown format)';
+COMMENT ON COLUMN ai_generated_content.model IS 'Ollama model used for generation';
+
+-- Create update trigger for ai_generated_content updated_at
+CREATE OR REPLACE FUNCTION update_ai_generated_content_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_ai_generated_content_updated_at
+    BEFORE UPDATE ON ai_generated_content
+    FOR EACH ROW
+    EXECUTE FUNCTION update_ai_generated_content_updated_at();

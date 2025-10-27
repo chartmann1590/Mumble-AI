@@ -50,11 +50,17 @@ export const regenerateTitle = async (transcriptionId, transcriptionText) => {
   return response.data;
 };
 
-export const generateAIContent = async (transcriptionText, generationType) => {
+export const generateAIContent = async (transcriptionText, generationType, transcriptionId = null) => {
   const response = await api.post('/generate-ai-content', {
     transcription_text: transcriptionText,
     generation_type: generationType,
+    transcription_id: transcriptionId,
   });
+  return response.data;
+};
+
+export const getAIContent = async (transcriptionId) => {
+  const response = await api.get(`/get-ai-content/${transcriptionId}`);
   return response.data;
 };
 

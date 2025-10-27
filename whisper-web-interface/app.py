@@ -920,39 +920,64 @@ def generate_ai_content():
             return jsonify({'error': 'Transcription text and generation type required'}), 400
 
         transcription_text = data['transcription_text']
+        transcription_id = data.get('transcription_id')  # Optional for saving to database
         generation_type = data['generation_type']
 
         # Define prompts for different generation types
         prompts = {
-            'brief_summary': f"""Provide a brief, concise summary of the following transcription in 1-2 paragraphs. Focus only on the most important points:
+            'brief_summary': f"""Provide a brief, concise summary of the following transcription in 1-2 paragraphs. Focus only on the most important points. Format your response in markdown with proper headings and bullet points where appropriate:
 
 {transcription_text}""",
 
-            'detailed_summary': f"""Provide a comprehensive, detailed summary of the following transcription. Include all major topics, key points, decisions made, important details, and the overall context:
+            'detailed_summary': f"""Provide a comprehensive, detailed summary of the following transcription. Include all major topics, key points, decisions made, important details, and the overall context. Format your response in markdown with proper headings, bullet points, and sections:
 
 {transcription_text}""",
 
-            'bullet_points': f"""Create a bullet-point summary of the following transcription. List the main topics, key points, and important takeaways as clear, concise bullet points:
+            'bullet_points': f"""Create a bullet-point summary of the following transcription. List the main topics, key points, and important takeaways as clear, concise bullet points. Use markdown formatting:
 
 {transcription_text}""",
 
-            'key_takeaways': f"""Identify and list the 5-10 most important key takeaways or insights from the following transcription. Be specific and actionable:
+            'key_takeaways': f"""Identify and list the 5-10 most important key takeaways or insights from the following transcription. Be specific and actionable. Format as a markdown numbered list:
 
 {transcription_text}""",
 
-            'action_items': f"""Extract all action items, tasks, and next steps mentioned in the following transcription. List them clearly with any mentioned deadlines or responsible parties:
+            'action_items': f"""Extract all action items, tasks, and next steps mentioned in the following transcription. List them clearly with any mentioned deadlines or responsible parties. Format as a markdown checklist:
 
 {transcription_text}""",
 
-            'outline': f"""Create a structured outline of the following transcription. Organize it hierarchically with main topics, subtopics, and key points. Use a clear outline format (I, II, III or 1, 2, 3):
+            'outline': f"""Create a structured outline of the following transcription. Organize it hierarchically with main topics, subtopics, and key points. Use proper markdown heading levels (##, ###, etc.):
 
 {transcription_text}""",
 
-            'meeting_notes': f"""Format the following transcription as structured meeting notes. Include: Date/Time (if mentioned), Attendees/Participants (if identifiable), Agenda Topics, Discussion Summary, Decisions Made, and Action Items:
+            'meeting_notes': f"""Format the following transcription as structured meeting notes in markdown. Include sections with proper headings for: Date/Time (if mentioned), Attendees/Participants (if identifiable), Agenda Topics, Discussion Summary, Decisions Made, and Action Items:
 
 {transcription_text}""",
 
-            'qa_format': f"""Extract and format all questions and answers from the following transcription. Present them in a clear Q&A format:
+            'qa_format': f"""Extract and format all questions and answers from the following transcription. Present them in a clear Q&A format using markdown. Use **Q:** and **A:** for questions and answers:
+
+{transcription_text}""",
+
+            'executive_summary': f"""Create an executive summary of the following transcription. This should be a high-level overview suitable for leadership, focusing on strategic insights, key decisions, and critical information. Keep it concise (2-3 paragraphs). Format in markdown with clear sections:
+
+{transcription_text}""",
+
+            'sop': f"""Based on the following transcription, create a Standard Operating Procedure (SOP) document. Include: Purpose, Scope, Responsibilities, Step-by-step Procedures, Safety/Quality Guidelines (if applicable), and References. Format as a professional markdown document with proper sections and numbering:
+
+{transcription_text}""",
+
+            'timeline': f"""Create a chronological timeline of events, topics, or steps discussed in the following transcription. Use markdown formatting with dates/times if mentioned, or sequential ordering. Use bullet points or numbered lists:
+
+{transcription_text}""",
+
+            'topics_tags': f"""Analyze the following transcription and extract the main topics, themes, and relevant tags. Organize them by importance and relevance. Format as markdown with categories and bullet points:
+
+{transcription_text}""",
+
+            'pros_cons': f"""Analyze the following transcription and create a Pros and Cons list for any decisions, options, or proposals discussed. Format as markdown with clear **Pros** and **Cons** sections with bullet points:
+
+{transcription_text}""",
+
+            'decisions_log': f"""Extract all decisions made in the following transcription. Create a decision log with: Decision title, Context, Options considered, Final decision, Rationale, and Date (if mentioned). Format as markdown with sections for each decision:
 
 {transcription_text}"""
         }
@@ -997,6 +1022,35 @@ def generate_ai_content():
 
         logger.info(f"Successfully generated {generation_type}, content length: {len(generated_content)}")
 
+        # Save to database if transcription_id is provided
+        if transcription_id:
+            conn = get_db_connection()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    # Use ON CONFLICT to update if already exists
+                    cursor.execute("""
+                        INSERT INTO ai_generated_content (transcription_id, generation_type, content, model)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (transcription_id, generation_type)
+                        DO UPDATE SET
+                            content = EXCLUDED.content,
+                            model = EXCLUDED.model,
+                            updated_at = CURRENT_TIMESTAMP
+                        RETURNING id
+                    """, (transcription_id, generation_type, generated_content, OLLAMA_MODEL))
+
+                    content_id = cursor.fetchone()[0]
+                    conn.commit()
+                    cursor.close()
+                    logger.info(f"Saved AI content to database, id: {content_id}")
+
+                except Exception as db_error:
+                    logger.error(f"Database save error: {db_error}")
+                    # Don't fail the request if database save fails
+                finally:
+                    return_db_connection(conn)
+
         return jsonify({
             'success': True,
             'content': generated_content,
@@ -1006,6 +1060,47 @@ def generate_ai_content():
 
     except Exception as e:
         logger.error(f"AI content generation error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get-ai-content/<int:transcription_id>', methods=['GET'])
+def get_ai_content(transcription_id):
+    """Get all AI-generated content for a transcription"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT generation_type, content, model, created_at, updated_at
+                FROM ai_generated_content
+                WHERE transcription_id = %s
+                ORDER BY updated_at DESC
+            """, (transcription_id,))
+
+            rows = cursor.fetchall()
+            cursor.close()
+
+            content_map = {}
+            for row in rows:
+                content_map[row[0]] = {
+                    'content': row[1],
+                    'model': row[2],
+                    'created_at': row[3].isoformat() if row[3] else None,
+                    'updated_at': row[4].isoformat() if row[4] else None
+                }
+
+            return jsonify({
+                'success': True,
+                'content': content_map
+            }), 200
+
+        finally:
+            return_db_connection(conn)
+
+    except Exception as e:
+        logger.error(f"Error fetching AI content: {e}")
         return jsonify({'error': str(e)}), 500
 
 def generate_title(transcription_text):

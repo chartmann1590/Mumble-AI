@@ -273,6 +273,7 @@ function TranscriptionDetailPage() {
           {/* AI Generation Panel */}
           <AIGenerationPanel
             transcriptionText={transcription.transcription_text}
+            transcriptionId={transcription.id}
           />
         </div>
       </div>
