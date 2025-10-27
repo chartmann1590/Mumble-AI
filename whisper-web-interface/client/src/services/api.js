@@ -122,4 +122,23 @@ export const deleteSpeakerProfile = async (profileId) => {
   return response.data;
 };
 
+// Settings management
+export const getSettings = async () => {
+  const response = await api.get('/settings');
+  return response.data;
+};
+
+export const updateSettings = async (settings) => {
+  const response = await api.post('/settings', settings);
+  return response.data;
+};
+
+export const testOllamaConnection = async (url, model) => {
+  const response = await api.post('/settings/test-ollama', {
+    url,
+    model,
+  });
+  return response.data;
+};
+
 export default api;

@@ -1,9 +1,10 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Mic, Upload, FileText } from 'lucide-react';
+import { Mic, Upload, FileText, Settings } from 'lucide-react';
 import HomePage from './pages/HomePage';
 import HistoryPage from './pages/HistoryPage';
 import TranscriptionDetailPage from './pages/TranscriptionDetailPage';
+import SettingsPage from './pages/SettingsPage';
 
 function Navigation() {
   const location = useLocation();
@@ -43,6 +44,17 @@ function Navigation() {
                 <FileText className="w-4 h-4" />
                 <span>History</span>
               </Link>
+              <Link
+                to="/settings"
+                className={`flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  location.pathname === '/settings'
+                    ? 'bg-indigo-50 text-indigo-600'
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                <span>Settings</span>
+              </Link>
             </div>
           </div>
         </div>
@@ -60,6 +72,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/transcription/:id" element={<TranscriptionDetailPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </div>
     </Router>

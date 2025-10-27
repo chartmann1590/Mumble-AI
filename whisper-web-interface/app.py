@@ -806,17 +806,20 @@ def summarize():
 
 {transcription_text}"""
         
+        # Get current Ollama configuration
+        ollama_url, ollama_model = get_ollama_config()
+
         ollama_payload = {
-            "model": OLLAMA_MODEL,
+            "model": ollama_model,
             "prompt": prompt,
             "stream": False
         }
-        
-        logger.info(f"Calling Ollama at {OLLAMA_URL}/api/generate with model {OLLAMA_MODEL}")
+
+        logger.info(f"Calling Ollama at {ollama_url}/api/generate with model {ollama_model}")
         try:
             # Use a much longer timeout for long transcriptions (30 minutes)
             timeout_duration = 1800
-            response = requests.post(f"{OLLAMA_URL}/api/generate", 
+            response = requests.post(f"{ollama_url}/api/generate", 
                                    json=ollama_payload, 
                                    timeout=timeout_duration)
         except requests.exceptions.Timeout:
@@ -989,17 +992,20 @@ def generate_ai_content():
 
         logger.info(f"Starting AI content generation, type: {generation_type}, text length: {len(transcription_text)}")
 
+        # Get current Ollama configuration
+        ollama_url, ollama_model = get_ollama_config()
+
         ollama_payload = {
-            "model": OLLAMA_MODEL,
+            "model": ollama_model,
             "prompt": prompt,
             "stream": False
         }
 
-        logger.info(f"Calling Ollama at {OLLAMA_URL}/api/generate with model {OLLAMA_MODEL}")
+        logger.info(f"Calling Ollama at {ollama_url}/api/generate with model {ollama_model}")
 
         try:
             # 5-minute timeout as requested
-            response = requests.post(f"{OLLAMA_URL}/api/generate",
+            response = requests.post(f"{ollama_url}/api/generate",
                                    json=ollama_payload,
                                    timeout=300)
         except requests.exceptions.Timeout:
@@ -1451,16 +1457,19 @@ Transcription:
 
 Title:"""
 
+        # Get current Ollama configuration
+        ollama_url, ollama_model = get_ollama_config()
+
         ollama_payload = {
-            "model": OLLAMA_MODEL,
+            "model": ollama_model,
             "prompt": prompt,
             "stream": False
         }
 
-        logger.info(f"Generating title using Ollama model {OLLAMA_MODEL}")
+        logger.info(f"Generating title using Ollama model {ollama_model}")
 
         try:
-            response = requests.post(f"{OLLAMA_URL}/api/generate",
+            response = requests.post(f"{ollama_url}/api/generate",
                                    json=ollama_payload,
                                    timeout=300)  # 5 minute timeout for title generation
         except requests.exceptions.Timeout:
@@ -2040,6 +2049,165 @@ def deactivate_speaker_profile(profile_id):
 
     except Exception as e:
         logger.error(f"Deactivate speaker profile error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def get_config(key, default=None):
+    """Get configuration value from database"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            logger.warning(f"Database unavailable, using default for {key}")
+            return default
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM bot_config WHERE key = %s", (key,))
+            result = cursor.fetchone()
+            cursor.close()
+            return_db_connection(conn)
+
+            if result:
+                return result[0]
+            return default
+
+        except Exception as e:
+            logger.error(f"Error fetching config {key}: {e}")
+            return_db_connection(conn)
+            return default
+
+    except Exception as e:
+        logger.error(f"Error in get_config: {e}")
+        return default
+
+def set_config(key, value):
+    """Set configuration value in database"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO bot_config (key, value, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (key, value))
+            conn.commit()
+            cursor.close()
+            return_db_connection(conn)
+            return True
+
+        except Exception as e:
+            logger.error(f"Error setting config {key}: {e}")
+            if conn:
+                conn.rollback()
+            return_db_connection(conn)
+            return False
+
+    except Exception as e:
+        logger.error(f"Error in set_config: {e}")
+        return False
+
+def get_ollama_config():
+    """Get current Ollama configuration (from database or environment)"""
+    ollama_url = get_config('ollama_url', OLLAMA_URL)
+    ollama_model = get_config('ollama_model', OLLAMA_MODEL)
+    return ollama_url, ollama_model
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Get current system settings"""
+    try:
+        ollama_url, ollama_model = get_ollama_config()
+
+        return jsonify({
+            'success': True,
+            'settings': {
+                'ollama_url': ollama_url,
+                'ollama_model': ollama_model,
+                'whisper_url': WHISPER_URL
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Get settings error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    """Update system settings"""
+    try:
+        data = request.get_json()
+
+        if 'ollama_url' in data:
+            if not set_config('ollama_url', data['ollama_url']):
+                return jsonify({'error': 'Failed to update ollama_url'}), 500
+
+        if 'ollama_model' in data:
+            if not set_config('ollama_model', data['ollama_model']):
+                return jsonify({'error': 'Failed to update ollama_model'}), 500
+
+        logger.info(f"Settings updated: {data}")
+
+        return jsonify({
+            'success': True,
+            'message': 'Settings updated successfully'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Update settings error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings/test-ollama', methods=['POST'])
+def test_ollama_connection():
+    """Test connection to Ollama server"""
+    try:
+        data = request.get_json()
+        test_url = data.get('url')
+        test_model = data.get('model')
+
+        if not test_url or not test_model:
+            return jsonify({'error': 'Missing url or model'}), 400
+
+        # Try to list models to test connection
+        try:
+            response = requests.get(f"{test_url}/api/tags", timeout=5)
+            if response.status_code == 200:
+                models = response.json().get('models', [])
+                model_names = [m['name'] for m in models]
+
+                # Check if the specified model exists
+                model_exists = any(test_model in name for name in model_names)
+
+                return jsonify({
+                    'success': True,
+                    'connected': True,
+                    'model_exists': model_exists,
+                    'available_models': model_names[:10]  # Limit to first 10
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f'Server responded with status {response.status_code}'
+                }), 200
+
+        except requests.exceptions.Timeout:
+            return jsonify({
+                'success': False,
+                'error': 'Connection timeout - server not responding'
+            }), 200
+
+        except requests.exceptions.ConnectionError:
+            return jsonify({
+                'success': False,
+                'error': 'Connection failed - cannot reach server'
+            }), 200
+
+    except Exception as e:
+        logger.error(f"Test Ollama connection error: {e}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
