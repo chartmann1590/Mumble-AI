@@ -1,6 +1,6 @@
 numpy<2.0
 opuslib
-protobuf==3.20.3
+protobuf==5.29.6
 requests
 psycopg2-binary
 redis==5.0.1
