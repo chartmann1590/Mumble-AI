@@ -32,7 +32,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from PIL import Image
-import PyPDF2
+import pypdf
 from docx import Document
 
 # Configure logging
@@ -3232,7 +3232,7 @@ User: "Do you know if I've got any meetings tomorrow?"
     def extract_text_from_pdf(self, filepath: str, filename: str) -> Dict:
         """Extract text from PDF file"""
         try:
-            reader = PyPDF2.PdfReader(filepath)
+            reader = pypdf.PdfReader(filepath)
             page_count = len(reader.pages)
             
             # Extract text from all pages
