@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+# pymumble 1.6.1 ships protos generated for protobuf 3.x; with protobuf 4/5 they only load
+# through the pure-Python implementation.
+ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
 WORKDIR /app
 
 # Install system dependencies
