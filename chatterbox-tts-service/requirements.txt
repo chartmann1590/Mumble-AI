@@ -1,16 +1,17 @@
-flask==3.0.0
-flask-cors==4.0.0
-werkzeug==3.0.1
+flask==3.1.3
+flask-cors==6.0.5
+werkzeug==3.1.9
 numpy==1.24.3
 scipy==1.11.3
 soundfile==0.12.1
 librosa==0.10.1
 pydub==0.25.1
-requests==2.31.0
+requests==2.33.0
 # TTS libraries
 TTS==0.22.0
-# Transformers - pinned to compatible version for TTS
-transformers==4.33.0
+# Transformers - pinned for TTS 0.22.0 (XTTS). 4.52+ drops GenerationMixin from
+# PreTrainedModel and XTTS generation breaks; 4.51.3 is the newest that works.
+transformers==4.51.3
 # Database support (optional, for integration with your stack)
 psycopg2-binary==2.9.9
 # Additional audio processing
