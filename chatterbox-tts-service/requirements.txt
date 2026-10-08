@@ -11,7 +11,7 @@ requests==2.33.0
 TTS==0.22.0
 # Transformers - pinned for TTS 0.22.0 (XTTS). 4.52+ drops GenerationMixin from
 # PreTrainedModel and XTTS generation breaks; 4.51.3 is the newest that works.
-transformers==4.51.3
+transformers==5.10.1
 # Database support (optional, for integration with your stack)
 psycopg2-binary==2.9.9
 # Additional audio processing
